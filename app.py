@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 
+import altair as alt
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
@@ -190,17 +191,32 @@ def image_download_button(label: str, image, filename: str) -> None:
     st.download_button(label, buffer.getvalue(), filename, "image/png", use_container_width=True)
 
 
-def plot_histogram(images: dict[str, object]) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(7.2, 3.2), dpi=130)
+def histogram_dataframe(images: dict[str, object]) -> pd.DataFrame:
+    rows = []
     for label, image in images.items():
         x, y = histogram(image)
-        ax.plot(x, y, linewidth=1.7, label=label)
-    ax.set_xlabel("灰度")
-    ax.set_ylabel("密度")
-    ax.grid(True, alpha=0.25)
-    ax.legend(loc="upper right", fontsize=8)
-    fig.tight_layout()
-    return fig
+        rows.extend({"灰度": xi, "密度": yi, "图像": label} for xi, yi in zip(x, y))
+    return pd.DataFrame(rows)
+
+
+def histogram_chart(images: dict[str, object]) -> alt.Chart:
+    data = histogram_dataframe(images)
+    return (
+        alt.Chart(data)
+        .mark_line(strokeWidth=2)
+        .encode(
+            x=alt.X("灰度:Q", title="灰度", scale=alt.Scale(domain=[0, 1])),
+            y=alt.Y("密度:Q", title="密度"),
+            color=alt.Color("图像:N", title="图像"),
+            tooltip=[
+                alt.Tooltip("图像:N", title="图像"),
+                alt.Tooltip("灰度:Q", title="灰度", format=".2f"),
+                alt.Tooltip("密度:Q", title="密度", format=".2f"),
+            ],
+        )
+        .properties(height=260)
+        .interactive()
+    )
 
 
 def plot_response(response) -> plt.Figure:
@@ -246,6 +262,7 @@ def run_methods(noisy, params, selected_methods):
                 params["nlm_patch_size"],
                 params["nlm_patch_distance"],
             )
+        outputs[method] = outputs[method].clip(0.0, 1.0)
     return outputs, response
 
 
@@ -399,10 +416,10 @@ outputs, response = run_methods(noisy, params, selected_methods)
 top = st.columns([1, 1, 1])
 with top[0]:
     st.markdown('<div class="method-label">原图 / 上传图</div>', unsafe_allow_html=True)
-    st.image(source, use_container_width=True)
+    st.image(source, clamp=True, use_container_width=True)
 with top[1]:
     st.markdown('<div class="method-label">当前含噪输入</div>', unsafe_allow_html=True)
-    st.image(noisy, use_container_width=True)
+    st.image(noisy, clamp=True, use_container_width=True)
 with top[2]:
     st.markdown('<div class="method-label">含噪图频谱</div>', unsafe_allow_html=True)
     st.image(magnitude_spectrum(noisy), clamp=True, use_container_width=True)
@@ -427,7 +444,7 @@ else:
     for index, (name, image) in enumerate(outputs.items()):
         with cols[index % len(cols)]:
             st.markdown(f'<div class="method-label">{name}</div>', unsafe_allow_html=True)
-            st.image(image, use_container_width=True)
+            st.image(image, clamp=True, use_container_width=True)
             image_download_button("下载结果", image, f"{name}.png")
 
 if has_reference and outputs:
@@ -444,7 +461,7 @@ with analysis_cols[1]:
     first_output = next(iter(outputs.items()), None)
     if first_output:
         hist_images[first_output[0]] = first_output[1]
-    st.pyplot(plot_histogram(hist_images), clear_figure=True)
+    st.altair_chart(histogram_chart(hist_images), use_container_width=True)
 with analysis_cols[2]:
     st.subheader("边缘保留观察")
     edge_cols = st.columns(2)
@@ -488,6 +505,6 @@ if show_demo_matrix:
         }
         case_outputs, _ = run_methods(case_noisy, case_params, methods)
         row = st.columns(1 + len(case_outputs))
-        row[0].image(case_noisy, caption="含噪图", use_container_width=True)
+        row[0].image(case_noisy, caption="含噪图", clamp=True, use_container_width=True)
         for col, (name, image) in zip(row[1:], case_outputs.items()):
-            col.image(image, caption=name, use_container_width=True)
+            col.image(image, caption=name, clamp=True, use_container_width=True)

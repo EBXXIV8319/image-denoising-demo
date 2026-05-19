@@ -99,30 +99,35 @@ def add_noise(
 def mean_filter(image: np.ndarray, size: int) -> np.ndarray:
     size = max(1, int(size))
     if image.ndim == 3:
-        return np.stack(
+        result = np.stack(
             [ndimage.uniform_filter(image[..., c], size=size) for c in range(image.shape[-1])],
             axis=-1,
         )
-    return ndimage.uniform_filter(image, size=size)
+    else:
+        result = ndimage.uniform_filter(image, size=size)
+    return np.clip(result, 0.0, 1.0)
 
 
 def median_filter(image: np.ndarray, size: int) -> np.ndarray:
     size = max(1, int(size))
     if image.ndim == 3:
-        return np.stack(
+        result = np.stack(
             [ndimage.median_filter(image[..., c], size=size) for c in range(image.shape[-1])],
             axis=-1,
         )
-    return ndimage.median_filter(image, size=size)
+    else:
+        result = ndimage.median_filter(image, size=size)
+    return np.clip(result, 0.0, 1.0)
 
 
 def bilateral_filter(image: np.ndarray, sigma_color: float, sigma_spatial: float) -> np.ndarray:
-    return restoration.denoise_bilateral(
+    result = restoration.denoise_bilateral(
         image,
         sigma_color=float(sigma_color),
         sigma_spatial=float(sigma_spatial),
         channel_axis=-1 if image.ndim == 3 else None,
     )
+    return np.clip(result, 0.0, 1.0)
 
 
 def nlm_filter(image: np.ndarray, h: float, patch_size: int, patch_distance: int) -> np.ndarray:
@@ -138,7 +143,7 @@ def nlm_filter(image: np.ndarray, h: float, patch_size: int, patch_distance: int
         high_pass = gray - ndimage.median_filter(gray, size=3)
         sigma = 1.4826 * np.median(np.abs(high_pass - np.median(high_pass)))
     strength = max(float(h), 0.01)
-    return restoration.denoise_nl_means(
+    result = restoration.denoise_nl_means(
         image,
         h=max(strength * sigma, 0.01),
         patch_size=int(patch_size),
@@ -146,6 +151,7 @@ def nlm_filter(image: np.ndarray, h: float, patch_size: int, patch_distance: int
         fast_mode=True,
         channel_axis=-1 if image.ndim == 3 else None,
     )
+    return np.clip(result, 0.0, 1.0)
 
 
 def radial_frequency_grid(shape: tuple[int, int]) -> np.ndarray:

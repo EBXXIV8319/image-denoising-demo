@@ -1,4 +1,5 @@
 streamlit
+altair
 numpy
 pillow
 scipy
