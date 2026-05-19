@@ -126,12 +126,17 @@ def bilateral_filter(image: np.ndarray, sigma_color: float, sigma_spatial: float
 
 
 def nlm_filter(image: np.ndarray, h: float, patch_size: int, patch_distance: int) -> np.ndarray:
-    sigma = np.mean(
-        restoration.estimate_sigma(
-            image,
-            channel_axis=-1 if image.ndim == 3 else None,
+    try:
+        sigma = np.mean(
+            restoration.estimate_sigma(
+                image,
+                channel_axis=-1 if image.ndim == 3 else None,
+            )
         )
-    )
+    except ImportError:
+        gray = to_gray(image)
+        high_pass = gray - ndimage.median_filter(gray, size=3)
+        sigma = 1.4826 * np.median(np.abs(high_pass - np.median(high_pass)))
     strength = max(float(h), 0.01)
     return restoration.denoise_nl_means(
         image,

@@ -3,5 +3,6 @@ numpy
 pillow
 scipy
 scikit-image
+PyWavelets
 matplotlib
 pandas
