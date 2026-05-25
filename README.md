@@ -17,6 +17,8 @@
 
 ## 运行
 
+建议使用 Python 3.12。Streamlit Community Cloud 部署时，在 Advanced settings 里选择 Python 3.12，避免 Python 3.14 与 SciPy / scikit-image 等图像科学依赖出现二进制导入兼容问题。
+
 ```powershell
 streamlit run app.py --browser.gatherUsageStats=false
 ```

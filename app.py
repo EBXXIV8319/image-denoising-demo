@@ -328,7 +328,7 @@ def metric_table(reference, noisy, outputs):
     return pd.DataFrame(rows)
 
 
-def downsample_for_tuning(image, max_side: int = 220):
+def downsample_for_tuning(image, max_side: int = 180):
     h, w = image.shape[:2]
     longest = max(h, w)
     if longest <= max_side:
