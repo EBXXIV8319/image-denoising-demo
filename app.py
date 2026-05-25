@@ -308,6 +308,7 @@ def run_methods(noisy, params, selected_methods):
             peak_count=params["auto_peak_count"],
             notch_radius_percent=params["auto_notch_radius"],
             depth=params["band_depth"],
+            line_threshold=params["auto_line_threshold"],
         )
     else:
         response = frequency_response(
@@ -399,8 +400,8 @@ def auto_tune_parameters(reference, noisy, params, selected_methods, noise_type:
 
     if not has_reference:
         if noise_type == "周期噪声":
-            tuned.update({"freq_filter": "Auto Band-Stop", "auto_peak_count": 4, "auto_notch_radius": 1.5, "band_depth": 0.95})
-            rows.append({"方法": "频域滤波", "策略": "无参考启发式", "参数": "Auto Band-Stop, 峰值=4, 半径=1.5%, 抑制=0.95"})
+            tuned.update({"freq_filter": "Auto Band-Stop", "auto_peak_count": 4, "auto_notch_radius": 1.5, "auto_line_threshold": 0.80, "band_depth": 0.95})
+            rows.append({"方法": "频域滤波", "策略": "无参考启发式", "参数": "Auto Band-Stop, 峰值=4, 半径=1.5%, 斜线阈值=0.80, 抑制=0.95"})
         elif noise_type == "椒盐噪声":
             tuned.update({"median_size": 3 if params["band_depth"] < 0.9 else 5})
             rows.append({"方法": "中值滤波", "策略": "无参考启发式", "参数": f"核大小={tuned['median_size']}"})
@@ -435,13 +436,20 @@ def auto_tune_parameters(reference, noisy, params, selected_methods, noise_type:
             for count in [2, 4, 6]:
                 for radius in [1.0, 1.5, 2.5]:
                     for depth in [0.8, 0.95]:
-                        response = auto_band_stop_response(noisy_small, count, radius, depth)
-                        candidates.append(
-                            (
-                                {"freq_filter": "Auto Band-Stop", "auto_peak_count": count, "auto_notch_radius": radius, "band_depth": depth},
-                                frequency_filter(noisy_small, response),
+                        for line_threshold in [0.70, 0.85]:
+                            response = auto_band_stop_response(noisy_small, count, radius, depth, line_threshold)
+                            candidates.append(
+                                (
+                                    {
+                                        "freq_filter": "Auto Band-Stop",
+                                        "auto_peak_count": count,
+                                        "auto_notch_radius": radius,
+                                        "auto_line_threshold": line_threshold,
+                                        "band_depth": depth,
+                                    },
+                                    frequency_filter(noisy_small, response),
+                                )
                             )
-                        )
         else:
             filter_family = params["freq_filter"]
             for cutoff_value in [14, 20, 26, 34, 42]:
@@ -628,6 +636,14 @@ with st.sidebar:
         band_depth = st.slider("带阻抑制强度", 0.0, 1.0, preset["band_depth"], 0.05)
         auto_peak_count = st.slider("自动带阻峰值数量", 2, 12, 4, 2)
         auto_notch_radius = st.slider("自动带阻抑制半径 (%)", 0.5, 5.0, 1.5, 0.5)
+        auto_line_threshold = st.slider(
+            "斜向亮线检测阈值",
+            0.10,
+            0.95,
+            0.80,
+            0.05,
+            help="阈值越高，只抑制越明显的斜向亮线；阈值越低，会捕获更多弱斜线但更容易过度滤波。",
+        )
 
     with st.expander("保边与高级滤波", expanded=True):
         bilateral_color = st.slider("双边滤波颜色 sigma", 0.01, 0.35, 0.10, 0.01)
@@ -652,6 +668,7 @@ params = {
     "band_depth": band_depth,
     "auto_peak_count": auto_peak_count,
     "auto_notch_radius": auto_notch_radius,
+    "auto_line_threshold": auto_line_threshold,
     "bilateral_color": bilateral_color,
     "bilateral_spatial": bilateral_spatial,
     "nlm_h": nlm_h,

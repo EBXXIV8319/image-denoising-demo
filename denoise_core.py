@@ -291,6 +291,7 @@ def _positive_axis_peaks(profile: np.ndarray, peak_count: int, guard_percent: fl
 def _detect_bright_line_angles(
     image: np.ndarray,
     line_count: int,
+    line_threshold: float,
     low_frequency_guard_percent: float,
 ) -> list[float]:
     gray = to_gray(image)
@@ -324,8 +325,15 @@ def _detect_bright_line_angles(
         | (angles > np.pi - axis_guard)
     )
     scores[axis_like] = 0
+    max_score = float(np.max(scores))
+    if max_score <= 0:
+        return []
+    threshold = max_score * float(np.clip(line_threshold, 0.0, 1.0))
     candidate_count = min(max(line_count * 8, line_count), scores.size)
     valid = np.argpartition(scores, -candidate_count)[-candidate_count:]
+    valid = valid[scores[valid] >= threshold]
+    if valid.size == 0:
+        return []
     peak_scores = scores[valid]
 
     selected: list[float] = []
@@ -346,6 +354,7 @@ def auto_band_stop_response(
     peak_count: int = 4,
     notch_radius_percent: float = 1.5,
     depth: float = 0.95,
+    line_threshold: float = 0.80,
     low_frequency_guard_percent: float = 8.0,
 ) -> np.ndarray:
     gray = to_gray(image)
@@ -389,7 +398,12 @@ def auto_band_stop_response(
     response *= (1.0 - (1.0 - notch[:, None]) * high_frequency_weight).astype(np.float32)
 
     line_sigma = max(min(h, w) * notch_radius_percent / 100.0, 1.0)
-    for angle in _detect_bright_line_angles(gray, max(1, min(2, peak_count // 2)), low_frequency_guard_percent):
+    for angle in _detect_bright_line_angles(
+        gray,
+        max(1, min(2, peak_count // 2)),
+        line_threshold,
+        low_frequency_guard_percent,
+    ):
         distance = np.abs(centered_x * np.sin(angle) - centered_y * np.cos(angle))
         line_notch = 1.0 - depth * np.exp(-(distance * distance) / (2 * line_sigma * line_sigma)) * high_frequency_weight
         response *= line_notch.astype(np.float32)
