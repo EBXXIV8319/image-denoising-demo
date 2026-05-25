@@ -16,6 +16,7 @@ from denoise_core import (
     bilateral_filter,
     edge_map,
     float_to_uint8,
+    frequency_axis_profiles,
     frequency_filter,
     frequency_response,
     histogram,
@@ -258,6 +259,39 @@ def histogram_chart(images: dict[str, object]) -> alt.Chart:
     )
 
 
+def frequency_axis_dataframe(image) -> pd.DataFrame:
+    profiles = frequency_axis_profiles(image)
+    rows = []
+    rows.extend(
+        {"轴向": "x轴频率", "归一化频率": freq, "强度": value}
+        for freq, value in zip(profiles["x_frequency"], profiles["x_profile"])
+    )
+    rows.extend(
+        {"轴向": "y轴频率", "归一化频率": freq, "强度": value}
+        for freq, value in zip(profiles["y_frequency"], profiles["y_profile"])
+    )
+    return pd.DataFrame(rows)
+
+
+def frequency_axis_chart(dataframe: pd.DataFrame) -> alt.Chart:
+    return (
+        alt.Chart(dataframe)
+        .mark_line(strokeWidth=2)
+        .encode(
+            x=alt.X("归一化频率:Q", title="归一化频率", scale=alt.Scale(domain=[-0.5, 0.5])),
+            y=alt.Y("强度:Q", title="频谱剖面强度"),
+            color=alt.Color("轴向:N", title="剖面"),
+            tooltip=[
+                alt.Tooltip("轴向:N", title="剖面"),
+                alt.Tooltip("归一化频率:Q", title="归一化频率", format=".3f"),
+                alt.Tooltip("强度:Q", title="强度", format=".3f"),
+            ],
+        )
+        .properties(height=260)
+        .interactive()
+    )
+
+
 def plot_response(response) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(4.2, 3.2), dpi=130)
     im = ax.imshow(response, cmap="magma")
@@ -473,6 +507,7 @@ def build_download_zip(
     metrics_df: pd.DataFrame | None,
     response_fig: plt.Figure,
     histogram_df: pd.DataFrame,
+    axis_profile_df: pd.DataFrame,
 ) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -493,6 +528,7 @@ def build_download_zip(
 
         archive.writestr("analysis/frequency_response.png", figure_png_bytes(response_fig))
         archive.writestr("tables/grayscale_histogram.csv", dataframe_csv_bytes(histogram_df))
+        archive.writestr("tables/frequency_axis_profiles.csv", dataframe_csv_bytes(axis_profile_df))
         archive.writestr("edges/noisy_edges.png", image_png_bytes(edge_map(noisy)))
         for name, image in outputs.items():
             archive.writestr(f"edges/{safe_filename(name)}_edges.png", image_png_bytes(edge_map(image)))
@@ -650,6 +686,7 @@ first_output = next(iter(outputs.items()), None)
 if first_output:
     hist_images[first_output[0]] = first_output[1]
 zip_histogram_df = histogram_dataframe({"含噪图": noisy, **outputs})
+axis_profile_df = frequency_axis_dataframe(noisy)
 response_fig = plot_response(response)
 
 top = st.columns([1, 1, 1])
@@ -718,10 +755,20 @@ with analysis_cols[2]:
         with edge_cols[1]:
             image_download_button("下载去噪结果边缘", output_edges, f"{first_output[0]}_edges.png")
 
+with st.expander("频域 x / y 轴异常频率剖面", expanded=params["freq_filter"] == "Auto Band-Stop"):
+    st.altair_chart(frequency_axis_chart(axis_profile_df), use_container_width=True)
+    st.download_button(
+        "下载频域 x / y 轴剖面 CSV",
+        dataframe_csv_bytes(axis_profile_df),
+        "frequency_axis_profiles.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+
 st.subheader("一键下载")
 st.download_button(
     "下载当前全部结果 ZIP",
-    build_download_zip(source, noisy, noisy_spectrum, outputs, metrics_df, response_fig, zip_histogram_df),
+    build_download_zip(source, noisy, noisy_spectrum, outputs, metrics_df, response_fig, zip_histogram_df, axis_profile_df),
     "image_denoising_results.zip",
     "application/zip",
     use_container_width=True,

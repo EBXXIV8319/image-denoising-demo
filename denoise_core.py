@@ -227,6 +227,67 @@ def frequency_response(
     return np.clip(response, 0.0, 1.0).astype(np.float32)
 
 
+def frequency_axis_profiles(image: np.ndarray) -> dict[str, np.ndarray]:
+    gray = to_gray(image)
+    spectrum = np.fft.fftshift(np.fft.fft2(gray))
+    magnitude = np.log1p(np.abs(spectrum))
+    profile_x = np.percentile(magnitude, 98, axis=0)
+    profile_y = np.percentile(magnitude, 98, axis=1)
+
+    def normalize(profile: np.ndarray) -> np.ndarray:
+        profile = profile.astype(np.float64)
+        span = np.max(profile) - np.min(profile)
+        if span <= 1e-12:
+            return np.zeros_like(profile)
+        return (profile - np.min(profile)) / span
+
+    h, w = gray.shape
+    return {
+        "x_frequency": (np.arange(w) - w // 2) / max(w, 1),
+        "x_profile": normalize(profile_x),
+        "y_frequency": (np.arange(h) - h // 2) / max(h, 1),
+        "y_profile": normalize(profile_y),
+    }
+
+
+def _positive_axis_peaks(profile: np.ndarray, peak_count: int, guard_percent: float) -> list[int]:
+    profile = ndimage.gaussian_filter1d(np.asarray(profile, dtype=np.float64), sigma=1.2)
+    n = profile.size
+    center = n // 2
+    guard = max(2, int(n * guard_percent / 100.0))
+    work = profile.copy()
+    work[: center + guard] = 0
+
+    positive = work[center + guard :]
+    if positive.size == 0 or np.max(positive) <= 0:
+        return []
+
+    baseline = np.median(positive)
+    mad = np.median(np.abs(positive - baseline))
+    prominence = max(0.04, 2.5 * mad)
+    distance = max(2, int(n * 0.025))
+    peaks, props = signal.find_peaks(work, distance=distance, prominence=prominence)
+
+    if peaks.size == 0:
+        candidate_count = min(max(peak_count * 3, peak_count), positive.size)
+        peaks = np.argpartition(positive, -candidate_count)[-candidate_count:] + center + guard
+        scores = work[peaks]
+    else:
+        scores = props.get("prominences", work[peaks])
+
+    order = np.argsort(scores)[::-1]
+    selected: list[int] = []
+    for peak in peaks[order]:
+        if peak <= center + guard:
+            continue
+        if any(abs(int(peak) - existing) < distance for existing in selected):
+            continue
+        selected.append(int(peak))
+        if len(selected) >= peak_count:
+            break
+    return selected
+
+
 def auto_band_stop_response(
     image: np.ndarray,
     peak_count: int = 8,
@@ -236,44 +297,29 @@ def auto_band_stop_response(
 ) -> np.ndarray:
     gray = to_gray(image)
     h, w = gray.shape
-    yy, xx = np.mgrid[0:h, 0:w]
-    center_y = h / 2
-    center_x = w / 2
-    radius = np.sqrt((yy - center_y) ** 2 + (xx - center_x) ** 2)
-    max_radius = np.sqrt(center_y**2 + center_x**2)
-
-    spectrum = np.fft.fftshift(np.fft.fft2(gray))
-    magnitude = np.log1p(np.abs(spectrum))
-    magnitude[radius < max_radius * low_frequency_guard_percent / 100.0] = 0
-
-    flat = magnitude.ravel()
-    count = int(np.clip(peak_count, 2, 20))
-    candidate_count = min(count * 12, flat.size)
-    peak_indices = np.argpartition(flat, -candidate_count)[-candidate_count:]
-    peak_indices = peak_indices[np.argsort(flat[peak_indices])[::-1]]
-
+    profiles = frequency_axis_profiles(gray)
+    x_peaks = _positive_axis_peaks(profiles["x_profile"], peak_count, low_frequency_guard_percent)
+    y_peaks = _positive_axis_peaks(profiles["y_profile"], peak_count, low_frequency_guard_percent)
+    x = np.arange(w)
+    y = np.arange(h)
+    center_x = w // 2
+    center_y = h // 2
     response = np.ones_like(gray, dtype=np.float32)
-    sigma = max(max_radius * notch_radius_percent / 100.0, 1.0)
     depth = float(np.clip(depth, 0.0, 1.0))
-    selected: list[tuple[int, int]] = []
+    sigma_x = max(w * notch_radius_percent / 100.0, 1.0)
+    sigma_y = max(h * notch_radius_percent / 100.0, 1.0)
 
-    for flat_index in peak_indices:
-        y, x = np.unravel_index(flat_index, gray.shape)
-        if magnitude[y, x] <= 0:
-            continue
-        if any((y - py) ** 2 + (x - px) ** 2 < sigma**2 for py, px in selected):
-            continue
+    for peak in x_peaks:
+        mirror = (2 * center_x - peak) % w
+        for column in (peak, mirror):
+            notch = 1.0 - depth * np.exp(-((x - column) ** 2) / (2 * sigma_x * sigma_x))
+            response *= notch[None, :].astype(np.float32)
 
-        mirror_y = int(round(2 * center_y - y)) % h
-        mirror_x = int(round(2 * center_x - x)) % w
-        for py, px in ((y, x), (mirror_y, mirror_x)):
-            distance_sq = (yy - py) ** 2 + (xx - px) ** 2
-            notch = 1.0 - depth * np.exp(-distance_sq / (2 * sigma * sigma))
-            response *= notch.astype(np.float32)
-
-        selected.append((y, x))
-        if len(selected) >= count:
-            break
+    for peak in y_peaks:
+        mirror = (2 * center_y - peak) % h
+        for row in (peak, mirror):
+            notch = 1.0 - depth * np.exp(-((y - row) ** 2) / (2 * sigma_y * sigma_y))
+            response *= notch[:, None].astype(np.float32)
 
     return np.clip(response, 0.0, 1.0).astype(np.float32)
 
