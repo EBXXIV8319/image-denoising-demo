@@ -509,6 +509,7 @@ def auto_tune_parameters(reference, noisy, params, selected_methods, noise_type:
 
 def build_download_zip(
     source,
+    source_spectrum,
     noisy,
     noisy_spectrum,
     filtered_spectra,
@@ -521,6 +522,7 @@ def build_download_zip(
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("images/source_image.png", image_png_bytes(source))
+        archive.writestr("images/source_spectrum.png", image_png_bytes(source_spectrum))
         archive.writestr("images/noisy_input.png", image_png_bytes(noisy))
         archive.writestr("images/noisy_spectrum.png", image_png_bytes(noisy_spectrum))
         for name, spectrum in filtered_spectra.items():
@@ -699,8 +701,9 @@ if auto_tune:
         params, tuning_report = auto_tune_parameters(source, noisy, params, selected_methods, noise_type, has_reference)
 
 outputs, response = run_methods(noisy, params, selected_methods)
+source_spectrum = magnitude_spectrum(source)
 noisy_spectrum = magnitude_spectrum(noisy)
-filtered_spectra = {name: magnitude_spectrum(image) for name, image in outputs.items()}
+filtered_spectra = {"频域滤波": magnitude_spectrum(outputs["频域滤波"])} if "频域滤波" in outputs else {}
 metrics_df = metric_table(source, noisy, outputs) if has_reference and outputs else None
 hist_images = {"含噪图": noisy}
 first_output = next(iter(outputs.items()), None)
@@ -710,16 +713,20 @@ zip_histogram_df = histogram_dataframe({"含噪图": noisy, **outputs})
 axis_profile_df = frequency_axis_dataframe(noisy)
 response_fig = plot_response(response)
 
-top = st.columns([1, 1, 1])
+top = st.columns([1, 1, 1, 1])
 with top[0]:
     st.markdown('<div class="method-label">原图 / 上传图</div>', unsafe_allow_html=True)
     st.image(source, clamp=True, use_container_width=True)
     image_download_button("下载原图 / 上传图", source, "source_image.png")
 with top[1]:
+    st.markdown('<div class="method-label">原图频谱</div>', unsafe_allow_html=True)
+    st.image(source_spectrum, clamp=True, use_container_width=True)
+    image_download_button("下载原图频谱", source_spectrum, "source_spectrum.png")
+with top[2]:
     st.markdown('<div class="method-label">当前含噪输入</div>', unsafe_allow_html=True)
     st.image(noisy, clamp=True, use_container_width=True)
     image_download_button("下载含噪输入", noisy, "noisy_input.png")
-with top[2]:
+with top[3]:
     st.markdown('<div class="method-label">含噪图频谱</div>', unsafe_allow_html=True)
     st.image(noisy_spectrum, clamp=True, use_container_width=True)
     image_download_button("下载含噪图频谱", noisy_spectrum, "noisy_spectrum.png")
@@ -797,7 +804,7 @@ with st.expander("频域 x / y 轴异常频率剖面", expanded=params["freq_fil
 st.subheader("一键下载")
 st.download_button(
     "下载当前全部结果 ZIP",
-    build_download_zip(source, noisy, noisy_spectrum, filtered_spectra, outputs, metrics_df, response_fig, zip_histogram_df, axis_profile_df),
+    build_download_zip(source, source_spectrum, noisy, noisy_spectrum, filtered_spectra, outputs, metrics_df, response_fig, zip_histogram_df, axis_profile_df),
     "image_denoising_results.zip",
     "application/zip",
     use_container_width=True,

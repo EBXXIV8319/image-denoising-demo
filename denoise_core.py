@@ -349,6 +349,25 @@ def _detect_bright_line_angles(
     return selected
 
 
+def _line_score(image: np.ndarray, angle: float, low_frequency_guard_percent: float) -> float:
+    gray = to_gray(image)
+    h, w = gray.shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    cx = w / 2
+    cy = h / 2
+    x = xx - cx
+    y = yy - cy
+    radius = np.sqrt(x * x + y * y)
+    max_radius = np.sqrt(cx * cx + cy * cy)
+    magnitude = np.log1p(np.abs(np.fft.fftshift(np.fft.fft2(gray))))
+    magnitude = exposure.rescale_intensity(magnitude, out_range=(0.0, 1.0))
+    magnitude[radius < max_radius * low_frequency_guard_percent / 100.0] = 0
+    sigma = max(min(h, w) * 0.006, 1.0)
+    distance = np.abs(x * np.sin(angle) - y * np.cos(angle))
+    line_weight = np.exp(-(distance * distance) / (2 * sigma * sigma))
+    return float(np.sum(magnitude * line_weight) / max(np.sum(line_weight), 1e-12))
+
+
 def auto_band_stop_response(
     image: np.ndarray,
     peak_count: int = 4,
@@ -398,12 +417,21 @@ def auto_band_stop_response(
     response *= (1.0 - (1.0 - notch[:, None]) * high_frequency_weight).astype(np.float32)
 
     line_sigma = max(min(h, w) * notch_radius_percent / 100.0, 1.0)
-    for angle in _detect_bright_line_angles(
+    line_angles = _detect_bright_line_angles(
         gray,
         max(1, min(2, peak_count // 2)),
         line_threshold,
         low_frequency_guard_percent,
-    ):
+    )
+    diagonal_angles = [np.pi / 4, 3 * np.pi / 4]
+    max_diagonal_score = max(_line_score(gray, angle, low_frequency_guard_percent) for angle in diagonal_angles)
+    for angle in diagonal_angles:
+        score = _line_score(gray, angle, low_frequency_guard_percent)
+        if max_diagonal_score > 0 and score >= max_diagonal_score * float(np.clip(line_threshold, 0.0, 1.0)):
+            if not any(abs(np.angle(np.exp(1j * 2 * (angle - existing)))) / 2 < np.deg2rad(10) for existing in line_angles):
+                line_angles.append(angle)
+
+    for angle in line_angles:
         distance = np.abs(centered_x * np.sin(angle) - centered_y * np.cos(angle))
         line_notch = 1.0 - depth * np.exp(-(distance * distance) / (2 * line_sigma * line_sigma)) * high_frequency_weight
         response *= line_notch.astype(np.float32)
