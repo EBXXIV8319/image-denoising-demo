@@ -343,8 +343,8 @@ def _detect_bright_line_angles(
 
 def auto_band_stop_response(
     image: np.ndarray,
-    peak_count: int = 8,
-    notch_radius_percent: float = 3.0,
+    peak_count: int = 4,
+    notch_radius_percent: float = 1.5,
     depth: float = 0.95,
     low_frequency_guard_percent: float = 8.0,
 ) -> np.ndarray:
@@ -382,8 +382,14 @@ def auto_band_stop_response(
     high_frequency_weight = 1.0 - np.exp(
         -(radius * radius) / (2 * (max_radius * low_frequency_guard_percent / 100.0) ** 2)
     )
+
+    notch = 1.0 - depth * np.exp(-((x - center_x) ** 2) / (2 * sigma_x * sigma_x))
+    response *= (1.0 - (1.0 - notch[None, :]) * high_frequency_weight).astype(np.float32)
+    notch = 1.0 - depth * np.exp(-((y - center_y) ** 2) / (2 * sigma_y * sigma_y))
+    response *= (1.0 - (1.0 - notch[:, None]) * high_frequency_weight).astype(np.float32)
+
     line_sigma = max(min(h, w) * notch_radius_percent / 100.0, 1.0)
-    for angle in _detect_bright_line_angles(gray, max(2, peak_count // 2), low_frequency_guard_percent):
+    for angle in _detect_bright_line_angles(gray, max(1, min(2, peak_count // 2)), low_frequency_guard_percent):
         distance = np.abs(centered_x * np.sin(angle) - centered_y * np.cos(angle))
         line_notch = 1.0 - depth * np.exp(-(distance * distance) / (2 * line_sigma * line_sigma)) * high_frequency_weight
         response *= line_notch.astype(np.float32)

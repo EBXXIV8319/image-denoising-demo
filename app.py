@@ -399,8 +399,8 @@ def auto_tune_parameters(reference, noisy, params, selected_methods, noise_type:
 
     if not has_reference:
         if noise_type == "周期噪声":
-            tuned.update({"freq_filter": "Auto Band-Stop", "auto_peak_count": 8, "auto_notch_radius": 3.0, "band_depth": 0.95})
-            rows.append({"方法": "频域滤波", "策略": "无参考启发式", "参数": "Auto Band-Stop, 峰值=8, 半径=3.0%, 抑制=0.95"})
+            tuned.update({"freq_filter": "Auto Band-Stop", "auto_peak_count": 4, "auto_notch_radius": 1.5, "band_depth": 0.95})
+            rows.append({"方法": "频域滤波", "策略": "无参考启发式", "参数": "Auto Band-Stop, 峰值=4, 半径=1.5%, 抑制=0.95"})
         elif noise_type == "椒盐噪声":
             tuned.update({"median_size": 3 if params["band_depth"] < 0.9 else 5})
             rows.append({"方法": "中值滤波", "策略": "无参考启发式", "参数": f"核大小={tuned['median_size']}"})
@@ -432,8 +432,8 @@ def auto_tune_parameters(reference, noisy, params, selected_methods, noise_type:
     if "频域滤波" in selected_methods:
         candidates = []
         if noise_type == "周期噪声" or params["freq_filter"] == "Auto Band-Stop":
-            for count in [4, 8, 12]:
-                for radius in [2.0, 3.0, 5.0]:
+            for count in [2, 4, 6]:
+                for radius in [1.0, 1.5, 2.5]:
                     for depth in [0.8, 0.95]:
                         response = auto_band_stop_response(noisy_small, count, radius, depth)
                         candidates.append(
@@ -626,8 +626,8 @@ with st.sidebar:
         band_center = st.slider("带阻中心半径 (%)", 3, 90, preset["band_center"], 1)
         band_width = st.slider("带阻宽度 (%)", 1, 30, preset["band_width"], 1)
         band_depth = st.slider("带阻抑制强度", 0.0, 1.0, preset["band_depth"], 0.05)
-        auto_peak_count = st.slider("自动带阻峰值数量", 2, 16, 8, 2)
-        auto_notch_radius = st.slider("自动带阻抑制半径 (%)", 1.0, 8.0, 3.0, 0.5)
+        auto_peak_count = st.slider("自动带阻峰值数量", 2, 12, 4, 2)
+        auto_notch_radius = st.slider("自动带阻抑制半径 (%)", 0.5, 5.0, 1.5, 0.5)
 
     with st.expander("保边与高级滤波", expanded=True):
         bilateral_color = st.slider("双边滤波颜色 sigma", 0.01, 0.35, 0.10, 0.01)
