@@ -87,10 +87,9 @@ def add_noise(
 
     if noise_type == "周期噪声":
         h, w = result.shape[:2]
-        yy, xx = np.mgrid[0:h, 0:w]
-        wave = np.sin(2 * np.pi * periodic_frequency * xx / max(w, 1))
-        wave += np.cos(2 * np.pi * periodic_frequency * yy / max(h, 1))
-        wave = periodic_strength * wave[..., None] / 2.0
+        yy = np.arange(h)[:, None]
+        wave = np.sin(2 * np.pi * periodic_frequency * yy / max(h, 1))
+        wave = periodic_strength * wave[..., None]
         result = result + wave
 
     return np.clip(result, 0.0, 1.0)
