@@ -228,10 +228,11 @@ def frequency_response(
 
 def frequency_axis_profiles(image: np.ndarray) -> dict[str, np.ndarray]:
     gray = to_gray(image)
-    spectrum = np.fft.fftshift(np.fft.fft2(gray))
-    magnitude = np.log1p(np.abs(spectrum))
-    profile_x = np.percentile(magnitude, 98, axis=0)
-    profile_y = np.percentile(magnitude, 98, axis=1)
+    h, w = gray.shape
+    spectrum_x = np.fft.fftshift(np.fft.fft(gray, axis=1), axes=1)
+    spectrum_y = np.fft.fftshift(np.fft.fft(gray, axis=0), axes=0)
+    profile_x = np.log1p(np.abs(spectrum_x[h // 2, :]))
+    profile_y = np.log1p(np.abs(spectrum_y[:, w // 2]))
 
     def normalize(profile: np.ndarray) -> np.ndarray:
         profile = profile.astype(np.float64)
@@ -240,11 +241,10 @@ def frequency_axis_profiles(image: np.ndarray) -> dict[str, np.ndarray]:
             return np.zeros_like(profile)
         return (profile - np.min(profile)) / span
 
-    h, w = gray.shape
     return {
-        "x_frequency": (np.arange(w) - w // 2) / max(w, 1),
+        "x_frequency": np.linspace(-0.5, 0.5, w) * w,
         "x_profile": normalize(profile_x),
-        "y_frequency": (np.arange(h) - h // 2) / max(h, 1),
+        "y_frequency": np.linspace(-0.5, 0.5, h) * h,
         "y_profile": normalize(profile_y),
     }
 

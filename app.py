@@ -263,11 +263,11 @@ def frequency_axis_dataframe(image) -> pd.DataFrame:
     profiles = frequency_axis_profiles(image)
     rows = []
     rows.extend(
-        {"轴向": "x轴频率", "归一化频率": freq, "强度": value}
+        {"轴向": "x轴频率", "频率索引": freq, "强度": value}
         for freq, value in zip(profiles["x_frequency"], profiles["x_profile"])
     )
     rows.extend(
-        {"轴向": "y轴频率", "归一化频率": freq, "强度": value}
+        {"轴向": "y轴频率", "频率索引": freq, "强度": value}
         for freq, value in zip(profiles["y_frequency"], profiles["y_profile"])
     )
     return pd.DataFrame(rows)
@@ -278,12 +278,12 @@ def frequency_axis_chart(dataframe: pd.DataFrame) -> alt.Chart:
         alt.Chart(dataframe)
         .mark_line(strokeWidth=2)
         .encode(
-            x=alt.X("归一化频率:Q", title="归一化频率", scale=alt.Scale(domain=[-0.5, 0.5])),
+            x=alt.X("频率索引:Q", title="频率索引"),
             y=alt.Y("强度:Q", title="频谱剖面强度"),
             color=alt.Color("轴向:N", title="剖面"),
             tooltip=[
                 alt.Tooltip("轴向:N", title="剖面"),
-                alt.Tooltip("归一化频率:Q", title="归一化频率", format=".3f"),
+                alt.Tooltip("频率索引:Q", title="频率索引", format=".1f"),
                 alt.Tooltip("强度:Q", title="强度", format=".3f"),
             ],
         )
