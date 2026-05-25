@@ -288,6 +288,60 @@ def _positive_axis_peaks(profile: np.ndarray, peak_count: int, guard_percent: fl
     return selected
 
 
+def _detect_bright_line_angles(
+    image: np.ndarray,
+    line_count: int,
+    low_frequency_guard_percent: float,
+) -> list[float]:
+    gray = to_gray(image)
+    h, w = gray.shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    cx = w / 2
+    cy = h / 2
+    x = xx - cx
+    y = yy - cy
+    radius = np.sqrt(x * x + y * y)
+    max_radius = np.sqrt(cx * cx + cy * cy)
+
+    magnitude = np.log1p(np.abs(np.fft.fftshift(np.fft.fft2(gray))))
+    magnitude = exposure.rescale_intensity(magnitude, out_range=(0.0, 1.0))
+    magnitude[radius < max_radius * low_frequency_guard_percent / 100.0] = 0
+
+    angles = np.linspace(0, np.pi, 180, endpoint=False)
+    sigma = max(min(h, w) * 0.006, 1.0)
+    scores = []
+    for angle in angles:
+        distance = np.abs(x * np.sin(angle) - y * np.cos(angle))
+        line_weight = np.exp(-(distance * distance) / (2 * sigma * sigma))
+        score = float(np.sum(magnitude * line_weight) / max(np.sum(line_weight), 1e-12))
+        scores.append(score)
+
+    scores = ndimage.gaussian_filter1d(np.asarray(scores), sigma=1.0, mode="wrap")
+    baseline = np.median(scores)
+    mad = np.median(np.abs(scores - baseline))
+    prominence = max(0.02, 2.0 * mad)
+    peaks, props = signal.find_peaks(np.r_[scores, scores, scores], distance=12, prominence=prominence)
+    valid = peaks[(peaks >= scores.size) & (peaks < 2 * scores.size)] - scores.size
+
+    if valid.size == 0:
+        candidate_count = min(max(line_count * 3, line_count), scores.size)
+        valid = np.argpartition(scores, -candidate_count)[-candidate_count:]
+        peak_scores = scores[valid]
+    else:
+        peak_scores = props.get("prominences", scores[valid])
+        peak_scores = peak_scores[(peaks >= scores.size) & (peaks < 2 * scores.size)]
+
+    selected: list[float] = []
+    for index in valid[np.argsort(peak_scores)[::-1]]:
+        angle = float(angles[int(index) % scores.size])
+        if any(abs(np.angle(np.exp(1j * 2 * (angle - existing)))) / 2 < np.deg2rad(8) for existing in selected):
+            continue
+        selected.append(angle)
+        if len(selected) >= line_count:
+            break
+    return selected
+
+
 def auto_band_stop_response(
     image: np.ndarray,
     peak_count: int = 8,
@@ -320,6 +374,20 @@ def auto_band_stop_response(
         for row in (peak, mirror):
             notch = 1.0 - depth * np.exp(-((y - row) ** 2) / (2 * sigma_y * sigma_y))
             response *= notch[:, None].astype(np.float32)
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    centered_x = xx - w / 2
+    centered_y = yy - h / 2
+    radius = np.sqrt(centered_x * centered_x + centered_y * centered_y)
+    max_radius = np.sqrt((w / 2) ** 2 + (h / 2) ** 2)
+    high_frequency_weight = 1.0 - np.exp(
+        -(radius * radius) / (2 * (max_radius * low_frequency_guard_percent / 100.0) ** 2)
+    )
+    line_sigma = max(min(h, w) * notch_radius_percent / 100.0, 1.0)
+    for angle in _detect_bright_line_angles(gray, max(2, peak_count // 2), low_frequency_guard_percent):
+        distance = np.abs(centered_x * np.sin(angle) - centered_y * np.cos(angle))
+        line_notch = 1.0 - depth * np.exp(-(distance * distance) / (2 * line_sigma * line_sigma)) * high_frequency_weight
+        response *= line_notch.astype(np.float32)
 
     return np.clip(response, 0.0, 1.0).astype(np.float32)
 
