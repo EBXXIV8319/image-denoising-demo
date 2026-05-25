@@ -266,15 +266,22 @@ def histogram(image: np.ndarray, bins: int = 64) -> tuple[np.ndarray, np.ndarray
 def reference_metrics(reference: np.ndarray, image: np.ndarray) -> MetricResult:
     reference = np.clip(reference, 0.0, 1.0)
     image = np.clip(image, 0.0, 1.0)
-    return MetricResult(
-        mse=float(metrics.mean_squared_error(reference, image)),
-        psnr=float(metrics.peak_signal_noise_ratio(reference, image, data_range=1.0)),
-        ssim=float(
+    min_side = min(reference.shape[:2])
+    if min_side < 3:
+        ssim = float("nan")
+    else:
+        win_size = min(7, min_side if min_side % 2 == 1 else min_side - 1)
+        ssim = float(
             metrics.structural_similarity(
                 reference,
                 image,
                 data_range=1.0,
                 channel_axis=-1 if reference.ndim == 3 else None,
+                win_size=win_size,
             )
-        ),
+        )
+    return MetricResult(
+        mse=float(metrics.mean_squared_error(reference, image)),
+        psnr=float(metrics.peak_signal_noise_ratio(reference, image, data_range=1.0)),
+        ssim=ssim,
     )

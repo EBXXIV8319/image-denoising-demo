@@ -191,6 +191,12 @@ def image_download_button(label: str, image, filename: str) -> None:
     st.download_button(label, buffer.getvalue(), filename, "image/png", use_container_width=True)
 
 
+def figure_download_button(label: str, fig: plt.Figure, filename: str) -> None:
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", bbox_inches="tight", dpi=160)
+    st.download_button(label, buffer.getvalue(), filename, "image/png", use_container_width=True)
+
+
 def histogram_dataframe(images: dict[str, object]) -> pd.DataFrame:
     rows = []
     for label, image in images.items():
@@ -417,12 +423,16 @@ top = st.columns([1, 1, 1])
 with top[0]:
     st.markdown('<div class="method-label">原图 / 上传图</div>', unsafe_allow_html=True)
     st.image(source, clamp=True, use_container_width=True)
+    image_download_button("下载原图 / 上传图", source, "source_image.png")
 with top[1]:
     st.markdown('<div class="method-label">当前含噪输入</div>', unsafe_allow_html=True)
     st.image(noisy, clamp=True, use_container_width=True)
+    image_download_button("下载含噪输入", noisy, "noisy_input.png")
 with top[2]:
     st.markdown('<div class="method-label">含噪图频谱</div>', unsafe_allow_html=True)
-    st.image(magnitude_spectrum(noisy), clamp=True, use_container_width=True)
+    noisy_spectrum = magnitude_spectrum(noisy)
+    st.image(noisy_spectrum, clamp=True, use_container_width=True)
+    image_download_button("下载含噪图频谱", noisy_spectrum, "noisy_spectrum.png")
 
 if has_reference:
     noisy_metrics = reference_metrics(source, noisy)
@@ -454,7 +464,10 @@ if has_reference and outputs:
 analysis_cols = st.columns([1, 1, 1])
 with analysis_cols[0]:
     st.subheader("频域响应")
-    st.pyplot(plot_response(response), clear_figure=True)
+    response_fig = plot_response(response)
+    st.pyplot(response_fig, clear_figure=False)
+    figure_download_button("下载频域响应", response_fig, "frequency_response.png")
+    plt.close(response_fig)
 with analysis_cols[1]:
     st.subheader("灰度直方图")
     hist_images = {"含噪图": noisy}
@@ -465,9 +478,15 @@ with analysis_cols[1]:
 with analysis_cols[2]:
     st.subheader("边缘保留观察")
     edge_cols = st.columns(2)
-    edge_cols[0].image(edge_map(noisy), caption="含噪图边缘", clamp=True, use_container_width=True)
+    noisy_edges = edge_map(noisy)
+    edge_cols[0].image(noisy_edges, caption="含噪图边缘", clamp=True, use_container_width=True)
+    with edge_cols[0]:
+        image_download_button("下载含噪图边缘", noisy_edges, "noisy_edges.png")
     if first_output:
-        edge_cols[1].image(edge_map(first_output[1]), caption=f"{first_output[0]} 边缘", clamp=True, use_container_width=True)
+        output_edges = edge_map(first_output[1])
+        edge_cols[1].image(output_edges, caption=f"{first_output[0]} 边缘", clamp=True, use_container_width=True)
+        with edge_cols[1]:
+            image_download_button("下载去噪结果边缘", output_edges, f"{first_output[0]}_edges.png")
 
 if show_demo_matrix:
     st.subheader("一键演示矩阵")
