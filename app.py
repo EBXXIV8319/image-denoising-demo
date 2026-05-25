@@ -5,12 +5,14 @@ import zipfile
 
 import altair as alt
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
 
 from denoise_core import (
     add_noise,
+    auto_band_stop_response,
     bilateral_filter,
     edge_map,
     float_to_uint8,
@@ -165,7 +167,7 @@ PRESETS = {
         "speckle_var": 0.04,
         "periodic_strength": 0.22,
         "periodic_frequency": 14,
-        "freq_filter": "Band-Stop",
+        "freq_filter": "Auto Band-Stop",
         "cutoff": 22,
         "order": 3,
         "ripple": 1.0,
@@ -266,17 +268,25 @@ def plot_response(response) -> plt.Figure:
 
 
 def run_methods(noisy, params, selected_methods):
-    response = frequency_response(
-        noisy.shape[:2],
-        params["freq_filter"],
-        params["cutoff"],
-        params["order"],
-        params["ripple"],
-        params["attenuation"],
-        params["band_center"],
-        params["band_width"],
-        params["band_depth"],
-    )
+    if params["freq_filter"] == "Auto Band-Stop":
+        response = auto_band_stop_response(
+            noisy,
+            peak_count=params["auto_peak_count"],
+            notch_radius_percent=params["auto_notch_radius"],
+            depth=params["band_depth"],
+        )
+    else:
+        response = frequency_response(
+            noisy.shape[:2],
+            params["freq_filter"],
+            params["cutoff"],
+            params["order"],
+            params["ripple"],
+            params["attenuation"],
+            params["band_center"],
+            params["band_width"],
+            params["band_depth"],
+        )
     outputs = {}
     for method in selected_methods:
         key = METHOD_MAP[method]
@@ -316,6 +326,143 @@ def metric_table(reference, noisy, outputs):
             }
         )
     return pd.DataFrame(rows)
+
+
+def downsample_for_tuning(image, max_side: int = 220):
+    h, w = image.shape[:2]
+    longest = max(h, w)
+    if longest <= max_side:
+        return image
+    scale = max_side / longest
+    size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    resized = Image.fromarray(float_to_uint8(image)).resize(size, Image.Resampling.BILINEAR)
+    return np.asarray(resized, dtype=np.float32) / 255.0
+
+
+def score_candidate(reference, candidate) -> float:
+    result = reference_metrics(reference, candidate)
+    if result.ssim == result.ssim:
+        return result.ssim
+    return -result.mse
+
+
+def best_by_reference(reference, candidates):
+    best_score = float("-inf")
+    best_params = None
+    best_image = None
+    for candidate_params, candidate_image in candidates:
+        score = score_candidate(reference, candidate_image)
+        if score > best_score:
+            best_score = score
+            best_params = candidate_params
+            best_image = candidate_image
+    return best_params, best_image, best_score
+
+
+def auto_tune_parameters(reference, noisy, params, selected_methods, noise_type: str, has_reference: bool):
+    tuned = dict(params)
+    rows = []
+
+    if not has_reference:
+        if noise_type == "周期噪声":
+            tuned.update({"freq_filter": "Auto Band-Stop", "auto_peak_count": 8, "auto_notch_radius": 3.0, "band_depth": 0.95})
+            rows.append({"方法": "频域滤波", "策略": "无参考启发式", "参数": "Auto Band-Stop, 峰值=8, 半径=3.0%, 抑制=0.95"})
+        elif noise_type == "椒盐噪声":
+            tuned.update({"median_size": 3 if params["band_depth"] < 0.9 else 5})
+            rows.append({"方法": "中值滤波", "策略": "无参考启发式", "参数": f"核大小={tuned['median_size']}"})
+        elif noise_type == "高斯噪声":
+            tuned.update({"mean_size": 3, "freq_filter": "Gaussian Low-Pass", "cutoff": 28, "bilateral_color": 0.08, "bilateral_spatial": 4.0, "nlm_h": 0.8})
+            rows.append({"方法": "通用", "策略": "无参考启发式", "参数": "轻度平滑，优先保留边缘"})
+        elif noise_type == "混合噪声":
+            tuned.update({"median_size": 3, "bilateral_color": 0.10, "bilateral_spatial": 4.0, "nlm_h": 1.0})
+            rows.append({"方法": "通用", "策略": "无参考启发式", "参数": "中值先抗脉冲，保边/NLM 中等强度"})
+        else:
+            rows.append({"方法": "通用", "策略": "无参考启发式", "参数": "保持当前参数"})
+        return tuned, pd.DataFrame(rows)
+
+    ref_small = downsample_for_tuning(reference)
+    noisy_small = downsample_for_tuning(noisy)
+
+    if "均值滤波" in selected_methods:
+        candidates = [({"mean_size": size}, mean_filter(noisy_small, size)) for size in [3, 5, 7, 9, 11]]
+        best, _, score = best_by_reference(ref_small, candidates)
+        tuned.update(best)
+        rows.append({"方法": "均值滤波", "策略": "SSIM 网格搜索", "参数": f"核大小={best['mean_size']}, SSIM={score:.4f}"})
+
+    if "中值滤波" in selected_methods:
+        candidates = [({"median_size": size}, median_filter(noisy_small, size)) for size in [3, 5, 7, 9]]
+        best, _, score = best_by_reference(ref_small, candidates)
+        tuned.update(best)
+        rows.append({"方法": "中值滤波", "策略": "SSIM 网格搜索", "参数": f"核大小={best['median_size']}, SSIM={score:.4f}"})
+
+    if "频域滤波" in selected_methods:
+        candidates = []
+        if noise_type == "周期噪声" or params["freq_filter"] == "Auto Band-Stop":
+            for count in [4, 8, 12]:
+                for radius in [2.0, 3.0, 5.0]:
+                    for depth in [0.8, 0.95]:
+                        response = auto_band_stop_response(noisy_small, count, radius, depth)
+                        candidates.append(
+                            (
+                                {"freq_filter": "Auto Band-Stop", "auto_peak_count": count, "auto_notch_radius": radius, "band_depth": depth},
+                                frequency_filter(noisy_small, response),
+                            )
+                        )
+        else:
+            filter_family = params["freq_filter"]
+            for cutoff_value in [14, 20, 26, 34, 42]:
+                for order_value in [2, 4, 6]:
+                    response = frequency_response(
+                        noisy_small.shape[:2],
+                        filter_family,
+                        cutoff_value,
+                        order_value,
+                        params["ripple"],
+                        params["attenuation"],
+                        params["band_center"],
+                        params["band_width"],
+                        params["band_depth"],
+                    )
+                    candidates.append(
+                        (
+                            {"freq_filter": filter_family, "cutoff": cutoff_value, "order": order_value},
+                            frequency_filter(noisy_small, response),
+                        )
+                    )
+        best, _, score = best_by_reference(ref_small, candidates)
+        tuned.update(best)
+        rows.append({"方法": "频域滤波", "策略": "SSIM 网格搜索", "参数": f"{best}, SSIM={score:.4f}"})
+
+    if "双边滤波" in selected_methods:
+        candidates = []
+        for sigma_color in [0.04, 0.08, 0.12, 0.18, 0.25]:
+            for sigma_spatial in [2.0, 4.0, 7.0, 10.0]:
+                candidates.append(
+                    (
+                        {"bilateral_color": sigma_color, "bilateral_spatial": sigma_spatial},
+                        bilateral_filter(noisy_small, sigma_color, sigma_spatial),
+                    )
+                )
+        best, _, score = best_by_reference(ref_small, candidates)
+        tuned.update(best)
+        rows.append({"方法": "双边滤波", "策略": "SSIM 网格搜索", "参数": f"颜色sigma={best['bilateral_color']}, 空间sigma={best['bilateral_spatial']}, SSIM={score:.4f}"})
+
+    if "NLM" in selected_methods:
+        candidates = []
+        for h_value in [0.6, 0.9, 1.2]:
+            for patch_size_value in [3, 5]:
+                for patch_distance_value in [3, 5]:
+                    candidates.append(
+                        (
+                            {"nlm_h": h_value, "nlm_patch_size": patch_size_value, "nlm_patch_distance": patch_distance_value},
+                            nlm_filter(noisy_small, h_value, patch_size_value, patch_distance_value),
+                        )
+                    )
+        best, _, score = best_by_reference(ref_small, candidates)
+        tuned.update(best)
+        rows.append({"方法": "NLM", "策略": "SSIM 网格搜索", "参数": f"h={best['nlm_h']}, patch={best['nlm_patch_size']}, 搜索={best['nlm_patch_distance']}, SSIM={score:.4f}"})
+
+    return tuned, pd.DataFrame(rows)
 
 
 def build_download_zip(
@@ -419,6 +566,7 @@ with st.sidebar:
                 "Chebyshev II",
                 "Elliptic",
                 "Band-Stop",
+                "Auto Band-Stop",
             ],
             index=[
                 "Ideal Low-Pass",
@@ -428,6 +576,7 @@ with st.sidebar:
                 "Chebyshev II",
                 "Elliptic",
                 "Band-Stop",
+                "Auto Band-Stop",
             ].index(preset["freq_filter"]),
             key=f"freq-{preset_name}",
         )
@@ -438,6 +587,8 @@ with st.sidebar:
         band_center = st.slider("带阻中心半径 (%)", 3, 90, preset["band_center"], 1)
         band_width = st.slider("带阻宽度 (%)", 1, 30, preset["band_width"], 1)
         band_depth = st.slider("带阻抑制强度", 0.0, 1.0, preset["band_depth"], 0.05)
+        auto_peak_count = st.slider("自动带阻峰值数量", 2, 16, 8, 2)
+        auto_notch_radius = st.slider("自动带阻抑制半径 (%)", 1.0, 8.0, 3.0, 0.5)
 
     with st.expander("保边与高级滤波", expanded=True):
         bilateral_color = st.slider("双边滤波颜色 sigma", 0.01, 0.35, 0.10, 0.01)
@@ -446,6 +597,7 @@ with st.sidebar:
         nlm_patch_size = st.slider("NLM patch 大小", 3, 9, 5, 2)
         nlm_patch_distance = st.slider("NLM 搜索半径", 3, 15, 7, 1)
 
+    auto_tune = st.toggle("自动优化滤波参数", value=False)
     show_demo_matrix = st.toggle("生成一键演示矩阵", value=False)
 
 params = {
@@ -459,6 +611,8 @@ params = {
     "band_center": band_center,
     "band_width": band_width,
     "band_depth": band_depth,
+    "auto_peak_count": auto_peak_count,
+    "auto_notch_radius": auto_notch_radius,
     "bilateral_color": bilateral_color,
     "bilateral_spatial": bilateral_spatial,
     "nlm_h": nlm_h,
@@ -482,6 +636,11 @@ noisy = add_noise(
     periodic_frequency,
     seed,
 )
+
+tuning_report = None
+if auto_tune:
+    with st.spinner("正在自动优化参数..."):
+        params, tuning_report = auto_tune_parameters(source, noisy, params, selected_methods, noise_type, has_reference)
 
 outputs, response = run_methods(noisy, params, selected_methods)
 noisy_spectrum = magnitude_spectrum(noisy)
@@ -518,6 +677,10 @@ else:
         '<p class="small-note">当前模式没有干净参考图，因此不显示 PSNR / SSIM / MSE；请使用频谱、直方图和边缘图做无参考比较。</p>',
         unsafe_allow_html=True,
     )
+
+if tuning_report is not None and not tuning_report.empty:
+    with st.expander("自动调参结果", expanded=True):
+        st.dataframe(tuning_report, hide_index=True, use_container_width=True)
 
 st.subheader("方法对比")
 if not outputs:

@@ -227,6 +227,57 @@ def frequency_response(
     return np.clip(response, 0.0, 1.0).astype(np.float32)
 
 
+def auto_band_stop_response(
+    image: np.ndarray,
+    peak_count: int = 8,
+    notch_radius_percent: float = 3.0,
+    depth: float = 0.95,
+    low_frequency_guard_percent: float = 8.0,
+) -> np.ndarray:
+    gray = to_gray(image)
+    h, w = gray.shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    center_y = h / 2
+    center_x = w / 2
+    radius = np.sqrt((yy - center_y) ** 2 + (xx - center_x) ** 2)
+    max_radius = np.sqrt(center_y**2 + center_x**2)
+
+    spectrum = np.fft.fftshift(np.fft.fft2(gray))
+    magnitude = np.log1p(np.abs(spectrum))
+    magnitude[radius < max_radius * low_frequency_guard_percent / 100.0] = 0
+
+    flat = magnitude.ravel()
+    count = int(np.clip(peak_count, 2, 20))
+    candidate_count = min(count * 12, flat.size)
+    peak_indices = np.argpartition(flat, -candidate_count)[-candidate_count:]
+    peak_indices = peak_indices[np.argsort(flat[peak_indices])[::-1]]
+
+    response = np.ones_like(gray, dtype=np.float32)
+    sigma = max(max_radius * notch_radius_percent / 100.0, 1.0)
+    depth = float(np.clip(depth, 0.0, 1.0))
+    selected: list[tuple[int, int]] = []
+
+    for flat_index in peak_indices:
+        y, x = np.unravel_index(flat_index, gray.shape)
+        if magnitude[y, x] <= 0:
+            continue
+        if any((y - py) ** 2 + (x - px) ** 2 < sigma**2 for py, px in selected):
+            continue
+
+        mirror_y = int(round(2 * center_y - y)) % h
+        mirror_x = int(round(2 * center_x - x)) % w
+        for py, px in ((y, x), (mirror_y, mirror_x)):
+            distance_sq = (yy - py) ** 2 + (xx - px) ** 2
+            notch = 1.0 - depth * np.exp(-distance_sq / (2 * sigma * sigma))
+            response *= notch.astype(np.float32)
+
+        selected.append((y, x))
+        if len(selected) >= count:
+            break
+
+    return np.clip(response, 0.0, 1.0).astype(np.float32)
+
+
 def frequency_filter(image: np.ndarray, response: np.ndarray) -> np.ndarray:
     if image.ndim == 2:
         channels = [image]
