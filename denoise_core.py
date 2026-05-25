@@ -317,24 +317,23 @@ def _detect_bright_line_angles(
         scores.append(score)
 
     scores = ndimage.gaussian_filter1d(np.asarray(scores), sigma=1.0, mode="wrap")
-    baseline = np.median(scores)
-    mad = np.median(np.abs(scores - baseline))
-    prominence = max(0.02, 2.0 * mad)
-    peaks, props = signal.find_peaks(np.r_[scores, scores, scores], distance=12, prominence=prominence)
-    valid = peaks[(peaks >= scores.size) & (peaks < 2 * scores.size)] - scores.size
-
-    if valid.size == 0:
-        candidate_count = min(max(line_count * 3, line_count), scores.size)
-        valid = np.argpartition(scores, -candidate_count)[-candidate_count:]
-        peak_scores = scores[valid]
-    else:
-        peak_scores = props.get("prominences", scores[valid])
-        peak_scores = peak_scores[(peaks >= scores.size) & (peaks < 2 * scores.size)]
+    axis_guard = np.deg2rad(8)
+    axis_like = (
+        (angles < axis_guard)
+        | (np.abs(angles - np.pi / 2) < axis_guard)
+        | (angles > np.pi - axis_guard)
+    )
+    scores[axis_like] = 0
+    candidate_count = min(max(line_count * 8, line_count), scores.size)
+    valid = np.argpartition(scores, -candidate_count)[-candidate_count:]
+    peak_scores = scores[valid]
 
     selected: list[float] = []
-    for index in valid[np.argsort(peak_scores)[::-1]]:
+    for index, score in sorted(zip(valid, peak_scores), key=lambda item: item[1], reverse=True):
         angle = float(angles[int(index) % scores.size])
-        if any(abs(np.angle(np.exp(1j * 2 * (angle - existing)))) / 2 < np.deg2rad(8) for existing in selected):
+        if score <= 0:
+            continue
+        if any(abs(np.angle(np.exp(1j * 2 * (angle - existing)))) / 2 < np.deg2rad(10) for existing in selected):
             continue
         selected.append(angle)
         if len(selected) >= line_count:

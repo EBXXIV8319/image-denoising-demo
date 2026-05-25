@@ -503,6 +503,7 @@ def build_download_zip(
     source,
     noisy,
     noisy_spectrum,
+    filtered_spectra,
     outputs,
     metrics_df: pd.DataFrame | None,
     response_fig: plt.Figure,
@@ -514,6 +515,8 @@ def build_download_zip(
         archive.writestr("images/source_image.png", image_png_bytes(source))
         archive.writestr("images/noisy_input.png", image_png_bytes(noisy))
         archive.writestr("images/noisy_spectrum.png", image_png_bytes(noisy_spectrum))
+        for name, spectrum in filtered_spectra.items():
+            archive.writestr(f"spectra/{safe_filename(name)}_spectrum.png", image_png_bytes(spectrum))
 
         for name, image in outputs.items():
             archive.writestr(f"filtered/{safe_filename(name)}.png", image_png_bytes(image))
@@ -680,6 +683,7 @@ if auto_tune:
 
 outputs, response = run_methods(noisy, params, selected_methods)
 noisy_spectrum = magnitude_spectrum(noisy)
+filtered_spectra = {name: magnitude_spectrum(image) for name, image in outputs.items()}
 metrics_df = metric_table(source, noisy, outputs) if has_reference and outputs else None
 hist_images = {"含噪图": noisy}
 first_output = next(iter(outputs.items()), None)
@@ -755,6 +759,14 @@ with analysis_cols[2]:
         with edge_cols[1]:
             image_download_button("下载去噪结果边缘", output_edges, f"{first_output[0]}_edges.png")
 
+if filtered_spectra:
+    with st.expander("频域滤波后频谱图", expanded="频域滤波" in filtered_spectra):
+        spectrum_cols = st.columns(min(3, len(filtered_spectra)))
+        for index, (name, spectrum) in enumerate(filtered_spectra.items()):
+            with spectrum_cols[index % len(spectrum_cols)]:
+                st.image(spectrum, caption=f"{name} 频谱", clamp=True, use_container_width=True)
+                image_download_button("下载频谱", spectrum, f"{safe_filename(name)}_spectrum.png")
+
 with st.expander("频域 x / y 轴异常频率剖面", expanded=params["freq_filter"] == "Auto Band-Stop"):
     st.altair_chart(frequency_axis_chart(axis_profile_df), use_container_width=True)
     st.download_button(
@@ -768,7 +780,7 @@ with st.expander("频域 x / y 轴异常频率剖面", expanded=params["freq_fil
 st.subheader("一键下载")
 st.download_button(
     "下载当前全部结果 ZIP",
-    build_download_zip(source, noisy, noisy_spectrum, outputs, metrics_df, response_fig, zip_histogram_df, axis_profile_df),
+    build_download_zip(source, noisy, noisy_spectrum, filtered_spectra, outputs, metrics_df, response_fig, zip_histogram_df, axis_profile_df),
     "image_denoising_results.zip",
     "application/zip",
     use_container_width=True,
