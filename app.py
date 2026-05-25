@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import zipfile
 
 import altair as alt
 import matplotlib.pyplot as plt
@@ -191,10 +192,40 @@ def image_download_button(label: str, image, filename: str) -> None:
     st.download_button(label, buffer.getvalue(), filename, "image/png", use_container_width=True)
 
 
+def image_png_bytes(image) -> bytes:
+    buffer = io.BytesIO()
+    Image.fromarray(float_to_uint8(image)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def dataframe_csv_bytes(dataframe: pd.DataFrame) -> bytes:
+    return dataframe.to_csv(index=False).encode("utf-8-sig")
+
+
 def figure_download_button(label: str, fig: plt.Figure, filename: str) -> None:
     buffer = io.BytesIO()
     fig.savefig(buffer, format="png", bbox_inches="tight", dpi=160)
     st.download_button(label, buffer.getvalue(), filename, "image/png", use_container_width=True)
+
+
+def figure_png_bytes(fig: plt.Figure) -> bytes:
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", bbox_inches="tight", dpi=160)
+    return buffer.getvalue()
+
+
+def safe_filename(name: str) -> str:
+    return (
+        name.replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "_")
+        .replace("*", "_")
+        .replace("?", "_")
+        .replace('"', "_")
+        .replace("<", "_")
+        .replace(">", "_")
+        .replace("|", "_")
+    )
 
 
 def histogram_dataframe(images: dict[str, object]) -> pd.DataFrame:
@@ -285,6 +316,41 @@ def metric_table(reference, noisy, outputs):
             }
         )
     return pd.DataFrame(rows)
+
+
+def build_download_zip(
+    source,
+    noisy,
+    noisy_spectrum,
+    outputs,
+    metrics_df: pd.DataFrame | None,
+    response_fig: plt.Figure,
+    histogram_df: pd.DataFrame,
+) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("images/source_image.png", image_png_bytes(source))
+        archive.writestr("images/noisy_input.png", image_png_bytes(noisy))
+        archive.writestr("images/noisy_spectrum.png", image_png_bytes(noisy_spectrum))
+
+        for name, image in outputs.items():
+            archive.writestr(f"filtered/{safe_filename(name)}.png", image_png_bytes(image))
+
+        if metrics_df is not None:
+            archive.writestr("tables/reference_metrics.csv", dataframe_csv_bytes(metrics_df))
+        else:
+            archive.writestr(
+                "tables/reference_metrics_unavailable.txt",
+                "当前模式没有干净参考图，因此不计算 MSE、PSNR、SSIM。\n".encode("utf-8"),
+            )
+
+        archive.writestr("analysis/frequency_response.png", figure_png_bytes(response_fig))
+        archive.writestr("tables/grayscale_histogram.csv", dataframe_csv_bytes(histogram_df))
+        archive.writestr("edges/noisy_edges.png", image_png_bytes(edge_map(noisy)))
+        for name, image in outputs.items():
+            archive.writestr(f"edges/{safe_filename(name)}_edges.png", image_png_bytes(edge_map(image)))
+
+    return buffer.getvalue()
 
 
 st.markdown(
@@ -418,6 +484,14 @@ noisy = add_noise(
 )
 
 outputs, response = run_methods(noisy, params, selected_methods)
+noisy_spectrum = magnitude_spectrum(noisy)
+metrics_df = metric_table(source, noisy, outputs) if has_reference and outputs else None
+hist_images = {"含噪图": noisy}
+first_output = next(iter(outputs.items()), None)
+if first_output:
+    hist_images[first_output[0]] = first_output[1]
+zip_histogram_df = histogram_dataframe({"含噪图": noisy, **outputs})
+response_fig = plot_response(response)
 
 top = st.columns([1, 1, 1])
 with top[0]:
@@ -430,7 +504,6 @@ with top[1]:
     image_download_button("下载含噪输入", noisy, "noisy_input.png")
 with top[2]:
     st.markdown('<div class="method-label">含噪图频谱</div>', unsafe_allow_html=True)
-    noisy_spectrum = magnitude_spectrum(noisy)
     st.image(noisy_spectrum, clamp=True, use_container_width=True)
     image_download_button("下载含噪图频谱", noisy_spectrum, "noisy_spectrum.png")
 
@@ -459,21 +532,15 @@ else:
 
 if has_reference and outputs:
     st.subheader("参考指标")
-    st.dataframe(metric_table(source, noisy, outputs), hide_index=True, use_container_width=True)
+    st.dataframe(metrics_df, hide_index=True, use_container_width=True)
 
 analysis_cols = st.columns([1, 1, 1])
 with analysis_cols[0]:
     st.subheader("频域响应")
-    response_fig = plot_response(response)
     st.pyplot(response_fig, clear_figure=False)
     figure_download_button("下载频域响应", response_fig, "frequency_response.png")
-    plt.close(response_fig)
 with analysis_cols[1]:
     st.subheader("灰度直方图")
-    hist_images = {"含噪图": noisy}
-    first_output = next(iter(outputs.items()), None)
-    if first_output:
-        hist_images[first_output[0]] = first_output[1]
     st.altair_chart(histogram_chart(hist_images), use_container_width=True)
 with analysis_cols[2]:
     st.subheader("边缘保留观察")
@@ -487,6 +554,16 @@ with analysis_cols[2]:
         edge_cols[1].image(output_edges, caption=f"{first_output[0]} 边缘", clamp=True, use_container_width=True)
         with edge_cols[1]:
             image_download_button("下载去噪结果边缘", output_edges, f"{first_output[0]}_edges.png")
+
+st.subheader("一键下载")
+st.download_button(
+    "下载当前全部结果 ZIP",
+    build_download_zip(source, noisy, noisy_spectrum, outputs, metrics_df, response_fig, zip_histogram_df),
+    "image_denoising_results.zip",
+    "application/zip",
+    use_container_width=True,
+)
+plt.close(response_fig)
 
 if show_demo_matrix:
     st.subheader("一键演示矩阵")
