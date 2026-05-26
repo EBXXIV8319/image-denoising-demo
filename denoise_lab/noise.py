@@ -12,7 +12,6 @@ def add_noise(
     noise_type: str,
     gaussian_sigma: float,
     sp_amount: float,
-    speckle_var: float,
     periodic_strength: float,
     periodic_frequency: int,
     seed: int,

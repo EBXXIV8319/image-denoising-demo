@@ -55,6 +55,37 @@ def safe_filename(name: str) -> str:
     return "".join("_" if char in invalid else char for char in name)
 
 
+def int_param(label: str, min_value: int, max_value: int, value: int, step: int, key: str, odd: bool = False) -> int:
+    raw_value = int(st.number_input(label, min_value=min_value, max_value=max_value, value=value, step=step, key=key))
+    if odd and raw_value % 2 == 0:
+        adjusted = raw_value + 1 if raw_value < max_value else raw_value - 1
+        st.caption(f"已按算法要求使用奇数：{adjusted}")
+        return adjusted
+    return raw_value
+
+
+def float_param(
+    label: str,
+    min_value: float,
+    max_value: float,
+    value: float,
+    step: float,
+    key: str,
+    fmt: str = "%.3f",
+) -> float:
+    return float(
+        st.number_input(
+            label,
+            min_value=min_value,
+            max_value=max_value,
+            value=value,
+            step=step,
+            format=fmt,
+            key=key,
+        )
+    )
+
+
 def histogram_dataframe(images: dict[str, object]) -> pd.DataFrame:
     rows = []
     for label, image in images.items():
@@ -183,15 +214,15 @@ with st.sidebar:
     st.header("噪声")
     noise_type = st.selectbox("噪声场景", NOISE_TYPES, index=0)
     seed = st.number_input("随机种子", min_value=0, max_value=9999, value=7, step=1)
-    gaussian_sigma = sp_amount = speckle_var = periodic_strength = 0.0
+    gaussian_sigma = sp_amount = periodic_strength = 0.0
     periodic_frequency = 12
     if noise_type in {"高斯噪声", "混合噪声"}:
-        gaussian_sigma = st.slider("高斯噪声标准差", 0.0, 0.25, 0.08, 0.01)
+        gaussian_sigma = float_param("高斯噪声标准差", 0.0, 0.25, 0.08, 0.01, "gaussian_sigma", "%.2f")
     if noise_type in {"椒盐噪声", "混合噪声"}:
-        sp_amount = st.slider("椒盐噪声比例", 0.0, 0.35, 0.08, 0.01)
+        sp_amount = float_param("椒盐噪声比例", 0.0, 0.35, 0.08, 0.01, "sp_amount", "%.2f")
     if noise_type == "周期噪声":
-        periodic_strength = st.slider("横向周期噪声强度", 0.0, 0.40, 0.22, 0.01)
-        periodic_frequency = st.slider("横向周期噪声频率（周期数）", 2, 40, 14, 1)
+        periodic_strength = float_param("横向周期噪声强度", 0.0, 0.40, 0.22, 0.01, "periodic_strength", "%.2f")
+        periodic_frequency = int_param("横向周期噪声频率（周期数）", 2, 40, 14, 1, "periodic_frequency")
     if noise_type == "无：上传图像已含噪":
         st.caption("当前模式不会向上传图像额外添加噪声。")
 
@@ -203,51 +234,55 @@ with st.sidebar:
     if noise_type == "混合噪声":
         with st.expander("混合噪声预处理配置", expanded=True):
             use_mixed_preprocess = st.checkbox("先使用中值滤波预处理后再交给其他滤波器", value=True)
-            mixed_preprocess_size = st.slider("预处理中值滤波核大小（像素）", 1, 15, 3, 2)
+            mixed_preprocess_size = int_param("预处理中值滤波核大小（像素）", 1, 15, 3, 2, "mixed_preprocess_size", odd=True)
 
     if "均值滤波" in selected_methods:
         with st.expander("均值滤波配置", expanded=True):
-            params["mean_size"] = st.slider("均值滤波核大小（像素）", 1, 15, 5, 2)
+            params["mean_size"] = int_param("均值滤波核大小（像素）", 1, 15, 5, 2, "mean_size", odd=True)
     if "中值滤波" in selected_methods:
         with st.expander("中值滤波配置", expanded=True):
-            params["median_size"] = st.slider("中值滤波核大小（像素）", 1, 15, 5, 2)
+            params["median_size"] = int_param("中值滤波核大小（像素）", 1, 15, 5, 2, "median_size", odd=True)
     if "频域滤波" in selected_methods:
         with st.expander("频域滤波配置", expanded=True):
             params["frequency_type"] = st.selectbox("频域滤波器类型", FREQUENCY_FILTERS, index=2)
             if params["frequency_type"] in {"Gaussian Low-Pass", "Butterworth Low-Pass"}:
-                params["cutoff"] = st.slider("低通截止半径（%）", 3, 90, 24, 1)
+                params["cutoff"] = int_param("低通截止半径（%）", 3, 90, 24, 1, "cutoff")
             if params["frequency_type"] == "Butterworth Low-Pass":
-                params["order"] = st.slider("巴特沃斯阶数（阶）", 1, 8, 3, 1)
+                params["order"] = int_param("巴特沃斯阶数（阶）", 1, 8, 3, 1, "butterworth_order")
             if params["frequency_type"] == "Butterworth Notch Reject":
-                notch_count = st.slider("陷波点组数（组）", 1, 6, 1, 1)
+                notch_count = int_param("陷波点组数（组）", 1, 6, 1, 1, "notch_count")
                 notches = []
                 for index in range(notch_count):
                     default_v = 81 * (index + 1)
                     st.markdown(f'<div class="method-label">陷波点组 {index + 1}</div>', unsafe_allow_html=True)
                     col_u, col_v = st.columns(2)
                     with col_u:
-                        notch_u = st.slider(f"组 {index + 1} Δu", -512, 512, 0, 1)
+                        notch_u = int_param(f"组 {index + 1} Δu", -512, 512, 0, 1, f"notch_u_{index}")
                     with col_v:
-                        notch_v = st.slider(f"组 {index + 1} Δv", -512, 512, default_v, 1)
+                        notch_v = int_param(f"组 {index + 1} Δv", -512, 512, default_v, 1, f"notch_v_{index}")
                     notches.append(
                         {
                             "u": notch_u,
                             "v": notch_v,
-                            "radius": st.slider(f"组 {index + 1} 陷波半径 D0（像素）", 1.0, 80.0, 8.0, 1.0),
-                            "order": st.slider(f"组 {index + 1} 巴特沃斯阶数（阶）", 1, 8, 2, 1),
-                            "depth": st.slider(f"组 {index + 1} 抑制强度（比例）", 0.0, 1.0, 0.95, 0.05),
+                            "radius": float_param(
+                                f"组 {index + 1} 陷波半径 D0（像素）", 1.0, 80.0, 8.0, 1.0, f"notch_radius_{index}", "%.1f"
+                            ),
+                            "order": int_param(f"组 {index + 1} 巴特沃斯阶数（阶）", 1, 8, 2, 1, f"notch_order_{index}"),
+                            "depth": float_param(
+                                f"组 {index + 1} 抑制强度（比例）", 0.0, 1.0, 0.95, 0.05, f"notch_depth_{index}", "%.2f"
+                            ),
                         }
                     )
                 params["notches"] = notches
     if "双边滤波" in selected_methods:
         with st.expander("双边滤波配置", expanded=True):
-            params["bilateral_color"] = st.slider("颜色 sigma（灰度差）", 0.01, 0.35, 0.10, 0.01)
-            params["bilateral_spatial"] = st.slider("空间 sigma（像素）", 1.0, 18.0, 5.0, 0.5)
+            params["bilateral_color"] = float_param("颜色 sigma（灰度差）", 0.01, 0.35, 0.10, 0.01, "bilateral_color", "%.2f")
+            params["bilateral_spatial"] = float_param("空间 sigma（像素）", 1.0, 18.0, 5.0, 0.5, "bilateral_spatial", "%.1f")
     if "NLM" in selected_methods:
         with st.expander("NLM 滤波配置", expanded=True):
-            params["nlm_h"] = st.slider("NLM 强度系数（倍）", 0.3, 2.2, 0.9, 0.1)
-            params["nlm_patch_size"] = st.slider("NLM patch 大小（像素）", 3, 9, 5, 2)
-            params["nlm_patch_distance"] = st.slider("NLM 搜索半径（像素）", 3, 15, 7, 1)
+            params["nlm_h"] = float_param("NLM 强度系数（倍）", 0.3, 2.2, 0.9, 0.1, "nlm_h", "%.1f")
+            params["nlm_patch_size"] = int_param("NLM patch 大小（像素）", 3, 9, 5, 2, "nlm_patch_size", odd=True)
+            params["nlm_patch_distance"] = int_param("NLM 搜索半径（像素）", 3, 15, 7, 1, "nlm_patch_distance")
 
 if uploaded is None:
     st.info("请先上传一张图片。")
@@ -255,7 +290,7 @@ if uploaded is None:
 
 source = pil_to_float_rgb(Image.open(uploaded))
 has_reference = noise_type != "无：上传图像已含噪"
-noisy = add_noise(source, noise_type, gaussian_sigma, sp_amount, speckle_var, periodic_strength, periodic_frequency, seed)
+noisy = add_noise(source, noise_type, gaussian_sigma, sp_amount, periodic_strength, periodic_frequency, seed)
 filter_input = median_filter(noisy, mixed_preprocess_size) if noise_type == "混合噪声" and use_mixed_preprocess else noisy
 params["filter_input"] = filter_input
 outputs, response = run_methods(noisy, selected_methods, params)
@@ -296,9 +331,10 @@ with image_tab:
     if not outputs:
         st.warning("请至少选择一种去噪方法。")
     else:
-        cols = st.columns(min(3, len(outputs)))
+        cols = st.columns([1, 1.1, 1]) if len(outputs) == 1 else st.columns(min(3, len(outputs)))
+        content_cols = [cols[1]] if len(outputs) == 1 else cols
         for index, (name, image) in enumerate(outputs.items()):
-            with cols[index % len(cols)]:
+            with content_cols[index % len(content_cols)]:
                 st.markdown(f'<div class="method-label">{name}</div>', unsafe_allow_html=True)
                 st.image(image, clamp=True, use_container_width=True)
                 image_download_button("下载结果", image, f"{name}.png")
