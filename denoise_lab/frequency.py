@@ -3,7 +3,12 @@ from __future__ import annotations
 import numpy as np
 
 
-FREQUENCY_FILTERS = ["Gaussian Low-Pass", "Butterworth Low-Pass", "Butterworth Notch Reject"]
+FREQUENCY_FILTERS = [
+    "Gaussian Low-Pass",
+    "Butterworth Low-Pass",
+    "Butterworth Radial Band-Stop",
+    "Butterworth Notch Reject",
+]
 
 
 def radial_frequency_grid(shape: tuple[int, int]) -> np.ndarray:
@@ -28,6 +33,7 @@ def frequency_response(
     notch_v: int = 81,
     notch_radius: float = 8.0,
     notches: list[dict[str, float]] | None = None,
+    radial_bands: list[dict[str, float]] | None = None,
 ) -> np.ndarray:
     if filter_type == "Gaussian Low-Pass":
         radius = radial_frequency_grid(shape)
@@ -38,6 +44,10 @@ def frequency_response(
         cutoff = float(np.clip(cutoff_percent / 100.0, 0.02, 0.98))
         order = max(1, int(order))
         response = 1.0 / (1.0 + (radius / max(cutoff, 1e-6)) ** (2 * order))
+    elif filter_type == "Butterworth Radial Band-Stop":
+        if radial_bands is None:
+            radial_bands = [{"center": band_center_percent, "width": band_width_percent, "order": order, "depth": band_depth}]
+        response = butterworth_radial_band_stop(shape, radial_bands)
     elif filter_type == "Butterworth Notch Reject":
         if notches is None:
             notches = [{"u": notch_u, "v": notch_v, "radius": notch_radius, "order": order, "depth": band_depth}]
@@ -46,6 +56,25 @@ def frequency_response(
         raise ValueError(f"Unsupported frequency filter: {filter_type}")
 
     return np.clip(response, 0.0, 1.0).astype(np.float32)
+
+
+def butterworth_radial_band_stop(
+    shape: tuple[int, int],
+    bands: list[dict[str, float]],
+) -> np.ndarray:
+    radius = radial_frequency_grid(shape)
+    response = np.ones(shape, dtype=np.float64)
+
+    for band in bands:
+        center = float(np.clip(band.get("center", 22.0) / 100.0, 0.01, 0.98))
+        width = float(np.clip(band.get("width", 4.0) / 100.0, 0.001, 0.98))
+        order = max(1, int(band.get("order", 2)))
+        depth = float(np.clip(band.get("depth", 0.95), 0.0, 1.0))
+        denominator = np.maximum(np.abs(radius * radius - center * center), 1e-12)
+        band_response = 1.0 / (1.0 + ((radius * width) / denominator) ** (2 * order))
+        response *= 1.0 - depth * (1.0 - band_response)
+
+    return np.clip(response, 0.0, 1.0)
 
 
 def butterworth_notch_reject(

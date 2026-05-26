@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 
 import altair as alt
@@ -34,6 +35,10 @@ def image_png_bytes(image) -> bytes:
 
 def dataframe_csv_bytes(dataframe: pd.DataFrame) -> bytes:
     return dataframe.to_csv(index=False).encode("utf-8-sig")
+
+
+def json_bytes(data: dict) -> bytes:
+    return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
 
 
 def image_download_button(label: str, image, filename: str) -> None:
@@ -141,17 +146,18 @@ def run_methods(noisy, selected_methods, params):
         outputs["中值滤波"] = median_filter(noisy, params["median_size"])
     if "频域滤波" in selected_methods:
         response = frequency_response(
-            filter_input.shape[:2],
-            params["frequency_type"],
-            params.get("cutoff", 24),
-            params.get("order", 3),
-            params.get("band_center", 22),
-            params.get("band_width", 4),
-            params.get("band_depth", 0.95),
-            params.get("notch_u", 0),
-            params.get("notch_v", 81),
-            params.get("notch_radius", 8.0),
-            params.get("notches"),
+            shape=filter_input.shape[:2],
+            filter_type=params["frequency_type"],
+            cutoff_percent=params.get("cutoff", 24),
+            order=params.get("order", 3),
+            band_center_percent=params.get("band_center", 22),
+            band_width_percent=params.get("band_width", 4),
+            band_depth=params.get("band_depth", 0.95),
+            notch_u=params.get("notch_u", 0),
+            notch_v=params.get("notch_v", 81),
+            notch_radius=params.get("notch_radius", 8.0),
+            notches=params.get("notches"),
+            radial_bands=params.get("radial_bands"),
         )
         outputs["频域滤波"] = frequency_filter(filter_input, response)
     if "双边滤波" in selected_methods:
@@ -161,7 +167,18 @@ def run_methods(noisy, selected_methods, params):
     return outputs, response
 
 
-def build_zip(source, source_spectrum, noisy, noisy_spectrum, outputs, response_fig, metrics_df, histogram_df, filtered_spectrum):
+def build_zip(
+    source,
+    source_spectrum,
+    noisy,
+    noisy_spectrum,
+    outputs,
+    response_fig,
+    metrics_df,
+    histogram_df,
+    filtered_spectrum,
+    parameter_export,
+):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("images/source_image.png", image_png_bytes(source))
@@ -179,6 +196,7 @@ def build_zip(source, source_spectrum, noisy, noisy_spectrum, outputs, response_
         else:
             archive.writestr("tables/reference_metrics_unavailable.txt", "当前模式没有干净参考图，因此不计算参考指标。\n".encode("utf-8"))
         archive.writestr("tables/grayscale_histogram.csv", dataframe_csv_bytes(histogram_df))
+        archive.writestr("config/current_parameters.json", json_bytes(parameter_export))
         archive.writestr("edges/noisy_edges.png", image_png_bytes(edge_map(noisy)))
         for name, image in outputs.items():
             archive.writestr(f"edges/{safe_filename(name)}_edges.png", image_png_bytes(edge_map(image)))
@@ -244,11 +262,34 @@ with st.sidebar:
             params["median_size"] = int_param("中值滤波核大小（像素）", 1, 15, 5, 2, "median_size", odd=True)
     if "频域滤波" in selected_methods:
         with st.expander("频域滤波配置", expanded=True):
-            params["frequency_type"] = st.selectbox("频域滤波器类型", FREQUENCY_FILTERS, index=2)
+            params["frequency_type"] = st.selectbox("频域滤波器类型", FREQUENCY_FILTERS, index=3)
             if params["frequency_type"] in {"Gaussian Low-Pass", "Butterworth Low-Pass"}:
                 params["cutoff"] = int_param("低通截止半径（%）", 3, 90, 24, 1, "cutoff")
             if params["frequency_type"] == "Butterworth Low-Pass":
                 params["order"] = int_param("巴特沃斯阶数（阶）", 1, 8, 3, 1, "butterworth_order")
+            if params["frequency_type"] == "Butterworth Radial Band-Stop":
+                band_count = int_param("径向 Band-Stop 组数（组）", 1, 6, 1, 1, "radial_band_count")
+                radial_bands = []
+                for index in range(band_count):
+                    st.markdown(f'<div class="method-label">径向 Band-Stop 组 {index + 1}</div>', unsafe_allow_html=True)
+                    col_center, col_width = st.columns(2)
+                    with col_center:
+                        band_center = float_param(
+                            f"组 {index + 1} 中心半径（%）", 1.0, 98.0, 22.0 + 8.0 * index, 1.0, f"radial_center_{index}", "%.1f"
+                        )
+                    with col_width:
+                        band_width = float_param(f"组 {index + 1} 带宽（%）", 0.5, 80.0, 4.0, 0.5, f"radial_width_{index}", "%.1f")
+                    radial_bands.append(
+                        {
+                            "center": band_center,
+                            "width": band_width,
+                            "order": int_param(f"组 {index + 1} 巴特沃斯阶数（阶）", 1, 8, 2, 1, f"radial_order_{index}"),
+                            "depth": float_param(
+                                f"组 {index + 1} 抑制强度（比例）", 0.0, 1.0, 0.95, 0.05, f"radial_depth_{index}", "%.2f"
+                            ),
+                        }
+                    )
+                params["radial_bands"] = radial_bands
             if params["frequency_type"] == "Butterworth Notch Reject":
                 notch_count = int_param("陷波点组数（组）", 1, 6, 1, 1, "notch_count")
                 notches = []
@@ -283,6 +324,32 @@ with st.sidebar:
             params["nlm_h"] = float_param("NLM 强度系数（倍）", 0.3, 2.2, 0.9, 0.1, "nlm_h", "%.1f")
             params["nlm_patch_size"] = int_param("NLM patch 大小（像素）", 3, 9, 5, 2, "nlm_patch_size", odd=True)
             params["nlm_patch_distance"] = int_param("NLM 搜索半径（像素）", 3, 15, 7, 1, "nlm_patch_distance")
+
+    parameter_export = {
+        "uploaded_file": uploaded.name if uploaded is not None else None,
+        "noise": {
+            "type": noise_type,
+            "seed": int(seed),
+            "gaussian_sigma": gaussian_sigma,
+            "salt_pepper_amount": sp_amount,
+            "periodic_strength": periodic_strength,
+            "periodic_frequency": periodic_frequency,
+        },
+        "selected_methods": selected_methods,
+        "mixed_noise_preprocess": {
+            "enabled": bool(noise_type == "混合噪声" and use_mixed_preprocess),
+            "median_size": mixed_preprocess_size,
+        },
+        "method_parameters": dict(params),
+    }
+    st.header("参数导出")
+    st.download_button(
+        "一键导出当前参数 JSON",
+        json_bytes(parameter_export),
+        "current_parameters.json",
+        "application/json",
+        use_container_width=True,
+    )
 
 if uploaded is None:
     st.info("请先上传一张图片。")
@@ -346,7 +413,18 @@ with image_tab:
     st.subheader("一键下载")
     st.download_button(
         "下载当前全部结果 ZIP",
-        build_zip(source, source_spectrum, noisy, noisy_spectrum, outputs, response_fig, metrics_df, zip_histogram_df, filtered_spectrum),
+        build_zip(
+            source,
+            source_spectrum,
+            noisy,
+            noisy_spectrum,
+            outputs,
+            response_fig,
+            metrics_df,
+            zip_histogram_df,
+            filtered_spectrum,
+            parameter_export,
+        ),
         "image_denoising_results.zip",
         "application/zip",
         use_container_width=True,
