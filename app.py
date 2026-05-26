@@ -117,6 +117,9 @@ def run_methods(noisy, selected_methods, params):
             params.get("band_center", 22),
             params.get("band_width", 4),
             params.get("band_depth", 0.95),
+            params.get("notch_u", 0),
+            params.get("notch_v", 81),
+            params.get("notch_radius", 8.0),
         )
         outputs["频域滤波"] = frequency_filter(filter_input, response)
     if "双边滤波" in selected_methods:
@@ -214,10 +217,12 @@ with st.sidebar:
                 params["cutoff"] = st.slider("低通截止半径（%）", 3, 90, 24, 1)
             if params["frequency_type"] == "Butterworth Low-Pass":
                 params["order"] = st.slider("巴特沃斯阶数（阶）", 1, 8, 3, 1)
-            if params["frequency_type"] == "Band-Stop":
-                params["band_center"] = st.slider("带阻中心半径（%）", 3, 90, 22, 1)
-                params["band_width"] = st.slider("带阻宽度（%）", 1, 30, 4, 1)
-                params["band_depth"] = st.slider("带阻抑制强度（比例）", 0.0, 1.0, 0.95, 0.05)
+            if params["frequency_type"] == "Butterworth Notch Reject":
+                params["notch_u"] = st.slider("陷波点水平偏移 Δu（像素）", -200, 200, 0, 1)
+                params["notch_v"] = st.slider("陷波点垂直偏移 Δv（像素）", -200, 200, 81, 1)
+                params["notch_radius"] = st.slider("陷波半径 D0（像素）", 1.0, 80.0, 8.0, 1.0)
+                params["order"] = st.slider("巴特沃斯陷波阶数（阶）", 1, 8, 2, 1)
+                params["band_depth"] = st.slider("陷波抑制强度（比例）", 0.0, 1.0, 0.95, 0.05)
     if "双边滤波" in selected_methods:
         with st.expander("双边滤波配置", expanded=True):
             params["bilateral_color"] = st.slider("颜色 sigma（灰度差）", 0.01, 0.35, 0.10, 0.01)

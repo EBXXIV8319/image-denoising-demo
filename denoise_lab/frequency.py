@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 
-FREQUENCY_FILTERS = ["Gaussian Low-Pass", "Butterworth Low-Pass", "Band-Stop"]
+FREQUENCY_FILTERS = ["Gaussian Low-Pass", "Butterworth Low-Pass", "Butterworth Notch Reject"]
 
 
 def radial_frequency_grid(shape: tuple[int, int]) -> np.ndarray:
@@ -24,24 +24,49 @@ def frequency_response(
     band_center_percent: float = 22.0,
     band_width_percent: float = 4.0,
     band_depth: float = 0.95,
+    notch_u: int = 0,
+    notch_v: int = 81,
+    notch_radius: float = 8.0,
 ) -> np.ndarray:
-    radius = radial_frequency_grid(shape)
-    cutoff = float(np.clip(cutoff_percent / 100.0, 0.02, 0.98))
-
     if filter_type == "Gaussian Low-Pass":
+        radius = radial_frequency_grid(shape)
+        cutoff = float(np.clip(cutoff_percent / 100.0, 0.02, 0.98))
         response = np.exp(-(radius * radius) / (2 * cutoff * cutoff))
     elif filter_type == "Butterworth Low-Pass":
+        radius = radial_frequency_grid(shape)
+        cutoff = float(np.clip(cutoff_percent / 100.0, 0.02, 0.98))
         order = max(1, int(order))
         response = 1.0 / (1.0 + (radius / max(cutoff, 1e-6)) ** (2 * order))
-    elif filter_type == "Band-Stop":
-        center = float(np.clip(band_center_percent / 100.0, 0.02, 0.98))
-        width = float(np.clip(band_width_percent / 100.0, 0.005, 0.40))
-        depth = float(np.clip(band_depth, 0.0, 1.0))
-        response = 1.0 - depth * np.exp(-((radius - center) ** 2) / (2 * width * width))
+    elif filter_type == "Butterworth Notch Reject":
+        response = butterworth_notch_reject(shape, notch_u, notch_v, notch_radius, order, band_depth)
     else:
         raise ValueError(f"Unsupported frequency filter: {filter_type}")
 
     return np.clip(response, 0.0, 1.0).astype(np.float32)
+
+
+def butterworth_notch_reject(
+    shape: tuple[int, int],
+    notch_u: int,
+    notch_v: int,
+    radius: float,
+    order: int,
+    depth: float,
+) -> np.ndarray:
+    h, w = shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    center_u = w / 2
+    center_v = h / 2
+    du = float(notch_u)
+    dv = float(notch_v)
+    radius = max(float(radius), 1e-6)
+    order = max(1, int(order))
+    depth = float(np.clip(depth, 0.0, 1.0))
+
+    d_positive = np.sqrt((xx - center_u - du) ** 2 + (yy - center_v - dv) ** 2)
+    d_negative = np.sqrt((xx - center_u + du) ** 2 + (yy - center_v + dv) ** 2)
+    response = 1.0 / (1.0 + (radius * radius / np.maximum(d_positive * d_negative, 1e-12)) ** order)
+    return 1.0 - depth * (1.0 - response)
 
 
 def frequency_filter(image: np.ndarray, response: np.ndarray) -> np.ndarray:
