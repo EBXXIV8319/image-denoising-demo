@@ -311,8 +311,10 @@ with analysis_cols[2]:
 
 if filtered_spectrum is not None:
     with st.expander("频域滤波后频谱图", expanded=True):
-        st.image(filtered_spectrum, caption="频域滤波频谱", clamp=True, use_container_width=True)
-        image_download_button("下载频域滤波频谱", filtered_spectrum, "频域滤波_spectrum.png")
+        spectrum_cols = st.columns([1, 1, 1])
+        with spectrum_cols[1]:
+            st.image(filtered_spectrum, caption="频域滤波频谱", clamp=True, use_container_width=True)
+            image_download_button("下载频域滤波频谱", filtered_spectrum, "频域滤波_spectrum.png")
 
 st.subheader("一键下载")
 st.download_button(
