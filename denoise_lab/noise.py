@@ -4,7 +4,7 @@ import numpy as np
 from skimage import util
 
 
-NOISE_TYPES = ["高斯噪声", "椒盐噪声", "斑点噪声", "混合噪声", "周期噪声", "无：上传图像已含噪"]
+NOISE_TYPES = ["高斯噪声", "椒盐噪声", "混合噪声", "周期噪声", "无：上传图像已含噪"]
 
 
 def add_noise(
@@ -28,9 +28,6 @@ def add_noise(
 
     if noise_type in {"椒盐噪声", "混合噪声"}:
         result = util.random_noise(result, mode="s&p", amount=float(sp_amount), rng=rng)
-
-    if noise_type == "斑点噪声":
-        result = util.random_noise(result, mode="speckle", var=float(speckle_var), rng=rng)
 
     if noise_type == "周期噪声":
         h = result.shape[0]

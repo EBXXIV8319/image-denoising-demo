@@ -103,13 +103,14 @@ def metric_table(reference, noisy, outputs) -> pd.DataFrame:
 def run_methods(noisy, selected_methods, params):
     outputs = {}
     response = None
+    filter_input = params.get("filter_input", noisy)
     if "均值滤波" in selected_methods:
-        outputs["均值滤波"] = mean_filter(noisy, params["mean_size"])
+        outputs["均值滤波"] = mean_filter(filter_input, params["mean_size"])
     if "中值滤波" in selected_methods:
         outputs["中值滤波"] = median_filter(noisy, params["median_size"])
     if "频域滤波" in selected_methods:
         response = frequency_response(
-            noisy.shape[:2],
+            filter_input.shape[:2],
             params["frequency_type"],
             params.get("cutoff", 24),
             params.get("order", 3),
@@ -117,11 +118,11 @@ def run_methods(noisy, selected_methods, params):
             params.get("band_width", 4),
             params.get("band_depth", 0.95),
         )
-        outputs["频域滤波"] = frequency_filter(noisy, response)
+        outputs["频域滤波"] = frequency_filter(filter_input, response)
     if "双边滤波" in selected_methods:
-        outputs["双边滤波"] = bilateral_filter(noisy, params["bilateral_color"], params["bilateral_spatial"])
+        outputs["双边滤波"] = bilateral_filter(filter_input, params["bilateral_color"], params["bilateral_spatial"])
     if "NLM" in selected_methods:
-        outputs["NLM"] = nlm_filter(noisy, params["nlm_h"], params["nlm_patch_size"], params["nlm_patch_distance"])
+        outputs["NLM"] = nlm_filter(filter_input, params["nlm_h"], params["nlm_patch_size"], params["nlm_patch_distance"])
     return outputs, response
 
 
@@ -184,8 +185,6 @@ with st.sidebar:
         gaussian_sigma = st.slider("高斯噪声标准差", 0.0, 0.25, 0.08, 0.01)
     if noise_type in {"椒盐噪声", "混合噪声"}:
         sp_amount = st.slider("椒盐噪声比例", 0.0, 0.35, 0.08, 0.01)
-    if noise_type == "斑点噪声":
-        speckle_var = st.slider("斑点噪声方差", 0.0, 0.20, 0.04, 0.01)
     if noise_type == "周期噪声":
         periodic_strength = st.slider("横向周期噪声强度", 0.0, 0.40, 0.22, 0.01)
         periodic_frequency = st.slider("横向周期噪声频率（周期数）", 2, 40, 14, 1)
@@ -195,6 +194,12 @@ with st.sidebar:
     st.header("方法")
     selected_methods = st.multiselect("参与对比的方法", METHODS, default=METHODS)
     params = {}
+    use_mixed_preprocess = False
+    mixed_preprocess_size = 3
+    if noise_type == "混合噪声":
+        with st.expander("混合噪声预处理配置", expanded=True):
+            use_mixed_preprocess = st.checkbox("先使用中值滤波预处理后再交给其他滤波器", value=True)
+            mixed_preprocess_size = st.slider("预处理中值滤波核大小（像素）", 1, 15, 3, 2)
 
     if "均值滤波" in selected_methods:
         with st.expander("均值滤波配置", expanded=True):
@@ -230,100 +235,104 @@ if uploaded is None:
 source = pil_to_float_rgb(Image.open(uploaded))
 has_reference = noise_type != "无：上传图像已含噪"
 noisy = add_noise(source, noise_type, gaussian_sigma, sp_amount, speckle_var, periodic_strength, periodic_frequency, seed)
+filter_input = median_filter(noisy, mixed_preprocess_size) if noise_type == "混合噪声" and use_mixed_preprocess else noisy
+params["filter_input"] = filter_input
 outputs, response = run_methods(noisy, selected_methods, params)
 
 source_spectrum = magnitude_spectrum(source)
 noisy_spectrum = magnitude_spectrum(noisy)
 filtered_spectrum = magnitude_spectrum(outputs["频域滤波"]) if "频域滤波" in outputs else None
 hist_images = {"含噪图": noisy}
-first_output = next(iter(outputs.items()), None)
-if first_output:
-    hist_images[first_output[0]] = first_output[1]
+hist_images.update(outputs)
 zip_histogram_df = histogram_dataframe({"含噪图": noisy, **outputs})
 metrics_df = metric_table(source, noisy, outputs) if has_reference and outputs else None
 response_fig = plot_response(response) if response is not None else None
 
-top = st.columns([1, 1, 1, 1])
-with top[0]:
-    st.markdown('<div class="method-label">原图 / 上传图</div>', unsafe_allow_html=True)
-    st.image(source, clamp=True, use_container_width=True)
-    image_download_button("下载原图 / 上传图", source, "source_image.png")
-with top[1]:
-    st.markdown('<div class="method-label">原图频谱</div>', unsafe_allow_html=True)
-    st.image(source_spectrum, clamp=True, use_container_width=True)
-    image_download_button("下载原图频谱", source_spectrum, "source_spectrum.png")
-with top[2]:
-    st.markdown('<div class="method-label">当前含噪输入</div>', unsafe_allow_html=True)
-    st.image(noisy, clamp=True, use_container_width=True)
-    image_download_button("下载含噪输入", noisy, "noisy_input.png")
-with top[3]:
-    st.markdown('<div class="method-label">含噪图频谱</div>', unsafe_allow_html=True)
-    st.image(noisy_spectrum, clamp=True, use_container_width=True)
-    image_download_button("下载含噪图频谱", noisy_spectrum, "noisy_spectrum.png")
+image_tab, spectrum_tab, histogram_tab, edge_tab = st.tabs(["图像", "频谱", "灰度直方图", "边缘"])
 
-if has_reference:
-    noisy_metrics = reference_metrics(source, noisy)
-    cols = st.columns(3)
-    cols[0].metric("含噪图 MSE", f"{noisy_metrics.mse:.5f}")
-    cols[1].metric("含噪图 PSNR", f"{noisy_metrics.psnr:.2f} dB")
-    cols[2].metric("含噪图 SSIM", f"{noisy_metrics.ssim:.4f}")
-else:
-    st.markdown('<p class="small-note">当前模式没有干净参考图，因此不显示 PSNR / SSIM / MSE。</p>', unsafe_allow_html=True)
+with image_tab:
+    top = st.columns([1, 1])
+    with top[0]:
+        st.markdown('<div class="method-label">原图 / 上传图</div>', unsafe_allow_html=True)
+        st.image(source, clamp=True, use_container_width=True)
+        image_download_button("下载原图 / 上传图", source, "source_image.png")
+    with top[1]:
+        st.markdown('<div class="method-label">当前含噪输入</div>', unsafe_allow_html=True)
+        st.image(noisy, clamp=True, use_container_width=True)
+        image_download_button("下载含噪输入", noisy, "noisy_input.png")
 
-st.subheader("方法对比")
-if not outputs:
-    st.warning("请至少选择一种去噪方法。")
-else:
-    cols = st.columns(min(3, len(outputs)))
-    for index, (name, image) in enumerate(outputs.items()):
-        with cols[index % len(cols)]:
-            st.markdown(f'<div class="method-label">{name}</div>', unsafe_allow_html=True)
-            st.image(image, clamp=True, use_container_width=True)
-            image_download_button("下载结果", image, f"{name}.png")
-
-if metrics_df is not None:
-    st.subheader("参考指标")
-    st.dataframe(metrics_df, hide_index=True, use_container_width=True)
-
-analysis_cols = st.columns([1, 1, 1])
-with analysis_cols[0]:
-    st.subheader("频域响应")
-    if response_fig is not None:
-        st.pyplot(response_fig, clear_figure=False)
-        figure_download_button("下载频域响应", response_fig, "frequency_response.png")
+    st.subheader("含噪图数据")
+    if has_reference:
+        noisy_metrics = reference_metrics(source, noisy)
+        cols = st.columns(3)
+        cols[0].metric("含噪图 MSE", f"{noisy_metrics.mse:.5f}")
+        cols[1].metric("含噪图 PSNR", f"{noisy_metrics.psnr:.2f} dB")
+        cols[2].metric("含噪图 SSIM", f"{noisy_metrics.ssim:.4f}")
     else:
-        st.caption("未选择频域滤波。")
-with analysis_cols[1]:
-    st.subheader("灰度直方图")
-    st.altair_chart(histogram_chart(hist_images), use_container_width=True)
-with analysis_cols[2]:
-    st.subheader("边缘保留观察")
-    edge_cols = st.columns(2)
-    noisy_edges = edge_map(noisy)
-    edge_cols[0].image(noisy_edges, caption="含噪图边缘", clamp=True, use_container_width=True)
-    with edge_cols[0]:
-        image_download_button("下载含噪图边缘", noisy_edges, "noisy_edges.png")
-    if first_output:
-        output_edges = edge_map(first_output[1])
-        edge_cols[1].image(output_edges, caption=f"{first_output[0]} 边缘", clamp=True, use_container_width=True)
-        with edge_cols[1]:
-            image_download_button("下载去噪结果边缘", output_edges, f"{first_output[0]}_edges.png")
+        st.markdown('<p class="small-note">当前模式没有干净参考图，因此不显示 PSNR / SSIM / MSE。</p>', unsafe_allow_html=True)
 
-if filtered_spectrum is not None:
-    with st.expander("频域滤波后频谱图", expanded=True):
-        spectrum_cols = st.columns([1, 1, 1])
-        with spectrum_cols[1]:
+    st.subheader("方法对比")
+    if not outputs:
+        st.warning("请至少选择一种去噪方法。")
+    else:
+        cols = st.columns(min(3, len(outputs)))
+        for index, (name, image) in enumerate(outputs.items()):
+            with cols[index % len(cols)]:
+                st.markdown(f'<div class="method-label">{name}</div>', unsafe_allow_html=True)
+                st.image(image, clamp=True, use_container_width=True)
+                image_download_button("下载结果", image, f"{name}.png")
+
+    if metrics_df is not None:
+        st.subheader("参考指标")
+        st.dataframe(metrics_df, hide_index=True, use_container_width=True)
+
+    st.subheader("一键下载")
+    st.download_button(
+        "下载当前全部结果 ZIP",
+        build_zip(source, source_spectrum, noisy, noisy_spectrum, outputs, response_fig, metrics_df, zip_histogram_df, filtered_spectrum),
+        "image_denoising_results.zip",
+        "application/zip",
+        use_container_width=True,
+    )
+
+with spectrum_tab:
+    spectrum_cols = st.columns([1, 1, 1])
+    with spectrum_cols[0]:
+        st.subheader("原图频谱")
+        st.image(source_spectrum, clamp=True, use_container_width=True)
+        image_download_button("下载原图频谱", source_spectrum, "source_spectrum.png")
+    with spectrum_cols[1]:
+        st.subheader("含噪图频谱")
+        st.image(noisy_spectrum, clamp=True, use_container_width=True)
+        image_download_button("下载含噪图频谱", noisy_spectrum, "noisy_spectrum.png")
+    with spectrum_cols[2]:
+        st.subheader("频域响应")
+        if response_fig is not None:
+            st.pyplot(response_fig, clear_figure=False)
+            figure_download_button("下载频域响应", response_fig, "frequency_response.png")
+        else:
+            st.caption("未选择频域滤波。")
+
+    if filtered_spectrum is not None:
+        small_cols = st.columns([1, 1, 1])
+        with small_cols[1]:
+            st.subheader("频域滤波后频谱")
             st.image(filtered_spectrum, caption="频域滤波频谱", clamp=True, use_container_width=True)
             image_download_button("下载频域滤波频谱", filtered_spectrum, "频域滤波_spectrum.png")
 
-st.subheader("一键下载")
-st.download_button(
-    "下载当前全部结果 ZIP",
-    build_zip(source, source_spectrum, noisy, noisy_spectrum, outputs, response_fig, metrics_df, zip_histogram_df, filtered_spectrum),
-    "image_denoising_results.zip",
-    "application/zip",
-    use_container_width=True,
-)
+with histogram_tab:
+    st.subheader("灰度直方图")
+    st.altair_chart(histogram_chart(hist_images), use_container_width=True)
+
+with edge_tab:
+    st.subheader("边缘保留观察")
+    edge_images = {"含噪图": noisy, **outputs}
+    cols = st.columns(min(3, len(edge_images)))
+    for index, (name, image) in enumerate(edge_images.items()):
+        edges = edge_map(image)
+        with cols[index % len(cols)]:
+            st.image(edges, caption=f"{name} 边缘", clamp=True, use_container_width=True)
+            image_download_button("下载边缘图", edges, f"{safe_filename(name)}_edges.png")
 
 if response_fig is not None:
     plt.close(response_fig)
