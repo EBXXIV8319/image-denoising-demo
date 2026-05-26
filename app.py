@@ -120,6 +120,7 @@ def run_methods(noisy, selected_methods, params):
             params.get("notch_u", 0),
             params.get("notch_v", 81),
             params.get("notch_radius", 8.0),
+            params.get("notches"),
         )
         outputs["频域滤波"] = frequency_filter(filter_input, response)
     if "双边滤波" in selected_methods:
@@ -218,11 +219,26 @@ with st.sidebar:
             if params["frequency_type"] == "Butterworth Low-Pass":
                 params["order"] = st.slider("巴特沃斯阶数（阶）", 1, 8, 3, 1)
             if params["frequency_type"] == "Butterworth Notch Reject":
-                params["notch_u"] = st.slider("陷波点水平偏移 Δu（像素）", -200, 200, 0, 1)
-                params["notch_v"] = st.slider("陷波点垂直偏移 Δv（像素）", -200, 200, 81, 1)
-                params["notch_radius"] = st.slider("陷波半径 D0（像素）", 1.0, 80.0, 8.0, 1.0)
-                params["order"] = st.slider("巴特沃斯陷波阶数（阶）", 1, 8, 2, 1)
-                params["band_depth"] = st.slider("陷波抑制强度（比例）", 0.0, 1.0, 0.95, 0.05)
+                notch_count = st.slider("陷波点组数（组）", 1, 6, 1, 1)
+                notches = []
+                for index in range(notch_count):
+                    default_v = 81 * (index + 1)
+                    st.markdown(f'<div class="method-label">陷波点组 {index + 1}</div>', unsafe_allow_html=True)
+                    col_u, col_v = st.columns(2)
+                    with col_u:
+                        notch_u = st.slider(f"组 {index + 1} Δu", -512, 512, 0, 1)
+                    with col_v:
+                        notch_v = st.slider(f"组 {index + 1} Δv", -512, 512, default_v, 1)
+                    notches.append(
+                        {
+                            "u": notch_u,
+                            "v": notch_v,
+                            "radius": st.slider(f"组 {index + 1} 陷波半径 D0（像素）", 1.0, 80.0, 8.0, 1.0),
+                            "order": st.slider(f"组 {index + 1} 巴特沃斯阶数（阶）", 1, 8, 2, 1),
+                            "depth": st.slider(f"组 {index + 1} 抑制强度（比例）", 0.0, 1.0, 0.95, 0.05),
+                        }
+                    )
+                params["notches"] = notches
     if "双边滤波" in selected_methods:
         with st.expander("双边滤波配置", expanded=True):
             params["bilateral_color"] = st.slider("颜色 sigma（灰度差）", 0.01, 0.35, 0.10, 0.01)
