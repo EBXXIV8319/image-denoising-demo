@@ -14,6 +14,8 @@
 - 频域滤波参数完全手动配置，径向 Band-Stop 与成对陷波带阻滤波器均支持多组手动参数
 - 所有数值参数均可直接键入，便于按频谱亮点位置精确设置参数
 - 支持一键导出当前参数 JSON，并在总 ZIP 中保存参数配置
+- 频谱页会分析含噪图频谱并推荐合适的频域滤波器与候选参数
+- 上传原图并由程序加噪时，可启用 BO 自动调参，自动应用并锁定调优后的参数
 - 混合噪声支持先用中值滤波预处理，再交给其他滤波器
 - 有参考图时显示 MSE、PSNR、SSIM；无参考图时改用视觉分析
 - 顶部导航栏分为图像、频谱、灰度直方图、边缘四个视图，切换视图不会影响侧边栏参数
@@ -39,6 +41,7 @@ pip install -r requirements.txt
 3. 选择“椒盐噪声”，手动配置中值滤波，突出中值滤波对脉冲噪声的优势。
 4. 选择“周期噪声”和“Butterworth Notch Reject”，根据频谱中关于中心成对出现的亮点，增加一组或多组陷波点，手动调整每组 Δu、Δv、陷波半径、阶数和抑制强度，观察 DFT 频谱中周期条纹对应异常分布的变化。
 5. 当异常能量呈同心圆环或径向频带分布时，选择“Butterworth Radial Band-Stop”，增加一组或多组中心半径与带宽参数进行手动带阻。
+6. 在上传原图并由程序加噪的场景中，启用“自动调参”，展示 BO 如何利用 MSE、PSNR、SSIM 搜索参数。
 
 ## 文件结构
 
@@ -46,6 +49,9 @@ pip install -r requirements.txt
 - `denoise_lab/noise.py`：噪声生成
 - `denoise_lab/spatial.py`：均值滤波和中值滤波
 - `denoise_lab/frequency.py`：频域响应和频域滤波
+- `denoise_lab/spectrum_advisor.py`：频谱分析和频域滤波器推荐
+- `denoise_lab/auto_tune.py`：BO 自动调参
 - `denoise_lab/advanced.py`：双边滤波和 NLM
 - `denoise_lab/analysis.py`：频谱、边缘、直方图和参考指标
 - `denoise_lab/image_io.py`：图像格式转换
+- `doc/guide.md`：指标解释、滤波公式和自动调参说明

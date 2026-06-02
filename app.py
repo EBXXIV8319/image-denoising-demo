@@ -12,9 +12,11 @@ from PIL import Image
 
 from denoise_lab.advanced import bilateral_filter, nlm_filter
 from denoise_lab.analysis import edge_map, histogram, magnitude_spectrum, reference_metrics
+from denoise_lab.auto_tune import tune_parameters
 from denoise_lab.frequency import FREQUENCY_FILTERS, frequency_filter, frequency_response
 from denoise_lab.image_io import float_to_uint8, pil_to_float_rgb
 from denoise_lab.noise import NOISE_TYPES, add_noise
+from denoise_lab.spectrum_advisor import analyze_spectrum
 from denoise_lab.spatial import mean_filter, median_filter
 
 
@@ -60,8 +62,20 @@ def safe_filename(name: str) -> str:
     return "".join("_" if char in invalid else char for char in name)
 
 
-def int_param(label: str, min_value: int, max_value: int, value: int, step: int, key: str, odd: bool = False) -> int:
-    raw_value = int(st.number_input(label, min_value=min_value, max_value=max_value, value=value, step=step, key=key))
+def int_param(
+    label: str,
+    min_value: int,
+    max_value: int,
+    value: int,
+    step: int,
+    key: str,
+    odd: bool = False,
+    disabled: bool = False,
+) -> int:
+    widget_key = f"{key}_auto_locked" if disabled else key
+    raw_value = int(
+        st.number_input(label, min_value=min_value, max_value=max_value, value=value, step=step, key=widget_key, disabled=disabled)
+    )
     if odd and raw_value % 2 == 0:
         adjusted = raw_value + 1 if raw_value < max_value else raw_value - 1
         st.caption(f"已按算法要求使用奇数：{adjusted}")
@@ -77,7 +91,9 @@ def float_param(
     step: float,
     key: str,
     fmt: str = "%.3f",
+    disabled: bool = False,
 ) -> float:
+    widget_key = f"{key}_auto_locked" if disabled else key
     return float(
         st.number_input(
             label,
@@ -86,7 +102,8 @@ def float_param(
             value=value,
             step=step,
             format=fmt,
-            key=key,
+            key=widget_key,
+            disabled=disabled,
         )
     )
 
@@ -244,6 +261,15 @@ with st.sidebar:
     if noise_type == "无：上传图像已含噪":
         st.caption("当前模式不会向上传图像额外添加噪声。")
 
+    source = pil_to_float_rgb(Image.open(uploaded)) if uploaded is not None else None
+    has_reference = noise_type != "无：上传图像已含噪"
+    noisy = (
+        add_noise(source, noise_type, gaussian_sigma, sp_amount, periodic_strength, periodic_frequency, seed)
+        if source is not None
+        else None
+    )
+    spectrum_recommendation = analyze_spectrum(noisy).to_dict() if noisy is not None else None
+
     st.header("方法")
     selected_methods = st.multiselect("参与对比的方法", METHODS, default=METHODS)
     params = {}
@@ -254,76 +280,293 @@ with st.sidebar:
             use_mixed_preprocess = st.checkbox("先使用中值滤波预处理后再交给其他滤波器", value=True)
             mixed_preprocess_size = int_param("预处理中值滤波核大小（像素）", 1, 15, 3, 2, "mixed_preprocess_size", odd=True)
 
+    st.header("自动调参")
+    auto_allowed = source is not None and has_reference and bool(selected_methods)
+    auto_iterations = int_param("BO 迭代次数", 4, 24, 10, 1, "auto_iterations", disabled=not auto_allowed)
+    auto_enabled = st.checkbox("启用自动调参", value=False, disabled=not auto_allowed)
+    auto_tune_result = None
+    auto_locked = False
+    if not has_reference:
+        st.caption("上传图像本身含噪时没有干净参考图，不能启用自动调参。")
+    elif source is None:
+        st.caption("请先上传原图后再启用自动调参。")
+    elif not selected_methods:
+        st.caption("请至少选择一种参与对比的方法。")
+
+    if auto_enabled and auto_allowed:
+        signature = json.dumps(
+            {
+                "uploaded_file": uploaded.name,
+                "noise_type": noise_type,
+                "seed": int(seed),
+                "gaussian_sigma": gaussian_sigma,
+                "sp_amount": sp_amount,
+                "periodic_strength": periodic_strength,
+                "periodic_frequency": periodic_frequency,
+                "selected_methods": selected_methods,
+                "mixed_preprocess": use_mixed_preprocess,
+                "mixed_preprocess_size": mixed_preprocess_size,
+                "iterations": auto_iterations,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if st.session_state.get("auto_tune_signature") != signature:
+            with st.spinner("正在使用贝叶斯优化进行自动调参..."):
+                result = tune_parameters(source, noisy, selected_methods, auto_iterations, int(seed))
+            st.session_state["auto_tune_signature"] = signature
+            st.session_state["auto_tune_result"] = result.to_dict()
+        auto_tune_result = st.session_state.get("auto_tune_result")
+        auto_locked = bool(auto_tune_result)
+        if auto_tune_result:
+            st.success("已应用 BO 自动调参结果，参数框已锁定。")
+    tuned_params = auto_tune_result["params"] if auto_tune_result else {}
+
     if "均值滤波" in selected_methods:
         with st.expander("均值滤波配置", expanded=True):
-            params["mean_size"] = int_param("均值滤波核大小（像素）", 1, 15, 5, 2, "mean_size", odd=True)
+            params["mean_size"] = int_param(
+                "均值滤波核大小（像素）",
+                1,
+                15,
+                int(tuned_params.get("mean_size", 5)),
+                2,
+                "mean_size",
+                odd=True,
+                disabled=auto_locked and "mean_size" in tuned_params,
+            )
     if "中值滤波" in selected_methods:
         with st.expander("中值滤波配置", expanded=True):
-            params["median_size"] = int_param("中值滤波核大小（像素）", 1, 15, 5, 2, "median_size", odd=True)
+            params["median_size"] = int_param(
+                "中值滤波核大小（像素）",
+                1,
+                15,
+                int(tuned_params.get("median_size", 5)),
+                2,
+                "median_size",
+                odd=True,
+                disabled=auto_locked and "median_size" in tuned_params,
+            )
     if "频域滤波" in selected_methods:
         with st.expander("频域滤波配置", expanded=True):
-            params["frequency_type"] = st.selectbox("频域滤波器类型", FREQUENCY_FILTERS, index=3)
+            tuned_frequency_type = tuned_params.get("frequency_type", "Butterworth Notch Reject")
+            frequency_index = FREQUENCY_FILTERS.index(tuned_frequency_type) if tuned_frequency_type in FREQUENCY_FILTERS else 3
+            params["frequency_type"] = st.selectbox(
+                "频域滤波器类型",
+                FREQUENCY_FILTERS,
+                index=frequency_index,
+                disabled=auto_locked and "frequency_type" in tuned_params,
+                key="frequency_type_auto_locked" if auto_locked and "frequency_type" in tuned_params else "frequency_type",
+            )
             if params["frequency_type"] in {"Gaussian Low-Pass", "Butterworth Low-Pass"}:
-                params["cutoff"] = int_param("低通截止半径（%）", 3, 90, 24, 1, "cutoff")
+                params["cutoff"] = int_param(
+                    "低通截止半径（%）",
+                    3,
+                    90,
+                    int(tuned_params.get("cutoff", 24)),
+                    1,
+                    "cutoff",
+                    disabled=auto_locked and "cutoff" in tuned_params,
+                )
             if params["frequency_type"] == "Butterworth Low-Pass":
-                params["order"] = int_param("巴特沃斯阶数（阶）", 1, 8, 3, 1, "butterworth_order")
+                params["order"] = int_param(
+                    "巴特沃斯阶数（阶）",
+                    1,
+                    8,
+                    int(tuned_params.get("order", 3)),
+                    1,
+                    "butterworth_order",
+                    disabled=auto_locked and "order" in tuned_params,
+                )
             if params["frequency_type"] == "Butterworth Radial Band-Stop":
-                band_count = int_param("径向 Band-Stop 组数（组）", 1, 6, 1, 1, "radial_band_count")
+                tuned_radial_bands = tuned_params.get("radial_bands", [])
+                band_count = int_param(
+                    "径向 Band-Stop 组数（组）",
+                    1,
+                    6,
+                    max(1, len(tuned_radial_bands)) if tuned_radial_bands else 1,
+                    1,
+                    "radial_band_count",
+                    disabled=auto_locked and bool(tuned_radial_bands),
+                )
                 radial_bands = []
                 for index in range(band_count):
+                    tuned_band = tuned_radial_bands[index] if index < len(tuned_radial_bands) else {}
                     st.markdown(f'<div class="method-label">径向 Band-Stop 组 {index + 1}</div>', unsafe_allow_html=True)
                     col_center, col_width = st.columns(2)
                     with col_center:
                         band_center = float_param(
-                            f"组 {index + 1} 中心半径（%）", 1.0, 98.0, 22.0 + 8.0 * index, 1.0, f"radial_center_{index}", "%.1f"
+                            f"组 {index + 1} 中心半径（%）",
+                            1.0,
+                            98.0,
+                            float(tuned_band.get("center", 22.0 + 8.0 * index)),
+                            1.0,
+                            f"radial_center_{index}",
+                            "%.1f",
+                            disabled=auto_locked and bool(tuned_radial_bands),
                         )
                     with col_width:
-                        band_width = float_param(f"组 {index + 1} 带宽（%）", 0.5, 80.0, 4.0, 0.5, f"radial_width_{index}", "%.1f")
+                        band_width = float_param(
+                            f"组 {index + 1} 带宽（%）",
+                            0.5,
+                            80.0,
+                            float(tuned_band.get("width", 4.0)),
+                            0.5,
+                            f"radial_width_{index}",
+                            "%.1f",
+                            disabled=auto_locked and bool(tuned_radial_bands),
+                        )
                     radial_bands.append(
                         {
                             "center": band_center,
                             "width": band_width,
-                            "order": int_param(f"组 {index + 1} 巴特沃斯阶数（阶）", 1, 8, 2, 1, f"radial_order_{index}"),
+                            "order": int_param(
+                                f"组 {index + 1} 巴特沃斯阶数（阶）",
+                                1,
+                                8,
+                                int(tuned_band.get("order", 2)),
+                                1,
+                                f"radial_order_{index}",
+                                disabled=auto_locked and bool(tuned_radial_bands),
+                            ),
                             "depth": float_param(
-                                f"组 {index + 1} 抑制强度（比例）", 0.0, 1.0, 0.95, 0.05, f"radial_depth_{index}", "%.2f"
+                                f"组 {index + 1} 抑制强度（比例）",
+                                0.0,
+                                1.0,
+                                float(tuned_band.get("depth", 0.95)),
+                                0.05,
+                                f"radial_depth_{index}",
+                                "%.2f",
+                                disabled=auto_locked and bool(tuned_radial_bands),
                             ),
                         }
                     )
                 params["radial_bands"] = radial_bands
             if params["frequency_type"] == "Butterworth Notch Reject":
-                notch_count = int_param("陷波点组数（组）", 1, 6, 1, 1, "notch_count")
+                tuned_notches = tuned_params.get("notches", [])
+                notch_count = int_param(
+                    "陷波点组数（组）",
+                    1,
+                    6,
+                    max(1, len(tuned_notches)) if tuned_notches else 1,
+                    1,
+                    "notch_count",
+                    disabled=auto_locked and bool(tuned_notches),
+                )
                 notches = []
                 for index in range(notch_count):
+                    tuned_notch = tuned_notches[index] if index < len(tuned_notches) else {}
                     default_v = 81 * (index + 1)
                     st.markdown(f'<div class="method-label">陷波点组 {index + 1}</div>', unsafe_allow_html=True)
                     col_u, col_v = st.columns(2)
                     with col_u:
-                        notch_u = int_param(f"组 {index + 1} Δu", -512, 512, 0, 1, f"notch_u_{index}")
+                        notch_u = int_param(
+                            f"组 {index + 1} Δu",
+                            -512,
+                            512,
+                            int(round(float(tuned_notch.get("u", 0)))),
+                            1,
+                            f"notch_u_{index}",
+                            disabled=auto_locked and bool(tuned_notches),
+                        )
                     with col_v:
-                        notch_v = int_param(f"组 {index + 1} Δv", -512, 512, default_v, 1, f"notch_v_{index}")
+                        notch_v = int_param(
+                            f"组 {index + 1} Δv",
+                            -512,
+                            512,
+                            int(round(float(tuned_notch.get("v", default_v)))),
+                            1,
+                            f"notch_v_{index}",
+                            disabled=auto_locked and bool(tuned_notches),
+                        )
                     notches.append(
                         {
                             "u": notch_u,
                             "v": notch_v,
                             "radius": float_param(
-                                f"组 {index + 1} 陷波半径 D0（像素）", 1.0, 80.0, 8.0, 1.0, f"notch_radius_{index}", "%.1f"
+                                f"组 {index + 1} 陷波半径 D0（像素）",
+                                1.0,
+                                80.0,
+                                float(tuned_notch.get("radius", 8.0)),
+                                1.0,
+                                f"notch_radius_{index}",
+                                "%.1f",
+                                disabled=auto_locked and bool(tuned_notches),
                             ),
-                            "order": int_param(f"组 {index + 1} 巴特沃斯阶数（阶）", 1, 8, 2, 1, f"notch_order_{index}"),
+                            "order": int_param(
+                                f"组 {index + 1} 巴特沃斯阶数（阶）",
+                                1,
+                                8,
+                                int(tuned_notch.get("order", 2)),
+                                1,
+                                f"notch_order_{index}",
+                                disabled=auto_locked and bool(tuned_notches),
+                            ),
                             "depth": float_param(
-                                f"组 {index + 1} 抑制强度（比例）", 0.0, 1.0, 0.95, 0.05, f"notch_depth_{index}", "%.2f"
+                                f"组 {index + 1} 抑制强度（比例）",
+                                0.0,
+                                1.0,
+                                float(tuned_notch.get("depth", 0.95)),
+                                0.05,
+                                f"notch_depth_{index}",
+                                "%.2f",
+                                disabled=auto_locked and bool(tuned_notches),
                             ),
                         }
                     )
                 params["notches"] = notches
     if "双边滤波" in selected_methods:
         with st.expander("双边滤波配置", expanded=True):
-            params["bilateral_color"] = float_param("颜色 sigma（灰度差）", 0.01, 0.35, 0.10, 0.01, "bilateral_color", "%.2f")
-            params["bilateral_spatial"] = float_param("空间 sigma（像素）", 1.0, 18.0, 5.0, 0.5, "bilateral_spatial", "%.1f")
+            params["bilateral_color"] = float_param(
+                "颜色 sigma（灰度差）",
+                0.01,
+                0.35,
+                float(tuned_params.get("bilateral_color", 0.10)),
+                0.01,
+                "bilateral_color",
+                "%.2f",
+                disabled=auto_locked and "bilateral_color" in tuned_params,
+            )
+            params["bilateral_spatial"] = float_param(
+                "空间 sigma（像素）",
+                1.0,
+                18.0,
+                float(tuned_params.get("bilateral_spatial", 5.0)),
+                0.5,
+                "bilateral_spatial",
+                "%.1f",
+                disabled=auto_locked and "bilateral_spatial" in tuned_params,
+            )
     if "NLM" in selected_methods:
         with st.expander("NLM 滤波配置", expanded=True):
-            params["nlm_h"] = float_param("NLM 强度系数（倍）", 0.3, 2.2, 0.9, 0.1, "nlm_h", "%.1f")
-            params["nlm_patch_size"] = int_param("NLM patch 大小（像素）", 3, 9, 5, 2, "nlm_patch_size", odd=True)
-            params["nlm_patch_distance"] = int_param("NLM 搜索半径（像素）", 3, 15, 7, 1, "nlm_patch_distance")
+            params["nlm_h"] = float_param(
+                "NLM 强度系数（倍）",
+                0.3,
+                2.2,
+                float(tuned_params.get("nlm_h", 0.9)),
+                0.1,
+                "nlm_h",
+                "%.1f",
+                disabled=auto_locked and "nlm_h" in tuned_params,
+            )
+            params["nlm_patch_size"] = int_param(
+                "NLM patch 大小（像素）",
+                3,
+                9,
+                int(tuned_params.get("nlm_patch_size", 5)),
+                2,
+                "nlm_patch_size",
+                odd=True,
+                disabled=auto_locked and "nlm_patch_size" in tuned_params,
+            )
+            params["nlm_patch_distance"] = int_param(
+                "NLM 搜索半径（像素）",
+                3,
+                15,
+                int(tuned_params.get("nlm_patch_distance", 7)),
+                1,
+                "nlm_patch_distance",
+                disabled=auto_locked and "nlm_patch_distance" in tuned_params,
+            )
 
     parameter_export = {
         "uploaded_file": uploaded.name if uploaded is not None else None,
@@ -340,6 +583,13 @@ with st.sidebar:
             "enabled": bool(noise_type == "混合噪声" and use_mixed_preprocess),
             "median_size": mixed_preprocess_size,
         },
+        "auto_tuning": {
+            "enabled": bool(auto_enabled and auto_allowed),
+            "locked": auto_locked,
+            "iterations": auto_iterations,
+            "result": auto_tune_result,
+        },
+        "spectrum_recommendation": spectrum_recommendation,
         "method_parameters": dict(params),
     }
     st.header("参数导出")
@@ -351,13 +601,10 @@ with st.sidebar:
         use_container_width=True,
     )
 
-if uploaded is None:
+if source is None:
     st.info("请先上传一张图片。")
     st.stop()
 
-source = pil_to_float_rgb(Image.open(uploaded))
-has_reference = noise_type != "无：上传图像已含噪"
-noisy = add_noise(source, noise_type, gaussian_sigma, sp_amount, periodic_strength, periodic_frequency, seed)
 filter_input = median_filter(noisy, mixed_preprocess_size) if noise_type == "混合噪声" and use_mixed_preprocess else noisy
 params["filter_input"] = filter_input
 outputs, response = run_methods(noisy, selected_methods, params)
@@ -431,6 +678,19 @@ with image_tab:
     )
 
 with spectrum_tab:
+    if spectrum_recommendation is not None:
+        st.subheader("频谱分析推荐")
+        st.info(f"{spectrum_recommendation['recommended_filter']}：{spectrum_recommendation['reason']}")
+        rec_cols = st.columns(4)
+        rec_cols[0].metric("离散峰组数", spectrum_recommendation["peak_count"])
+        rec_cols[1].metric("径向峰组数", spectrum_recommendation["radial_peak_count"])
+        rec_cols[2].metric("轴向能量比", f"{spectrum_recommendation['axial_energy_ratio']:.2f}")
+        rec_cols[3].metric("高频能量比", f"{spectrum_recommendation['high_frequency_ratio']:.2f}")
+        if spectrum_recommendation["notch_points"]:
+            st.caption(f"建议陷波点：{spectrum_recommendation['notch_points']}")
+        if spectrum_recommendation["radial_bands"]:
+            st.caption(f"建议径向 Band-Stop：{spectrum_recommendation['radial_bands']}")
+
     spectrum_cols = st.columns([1, 1, 1])
     with spectrum_cols[0]:
         st.subheader("原图频谱")
