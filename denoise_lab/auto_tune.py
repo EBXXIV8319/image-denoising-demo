@@ -9,6 +9,7 @@ import numpy as np
 from .advanced import bilateral_filter, nlm_filter
 from .analysis import reference_metrics
 from .frequency import frequency_filter, frequency_response
+from .no_reference import niqe_like_quality
 from .spatial import mean_filter, median_filter
 from .spectrum_advisor import SpectrumRecommendation, analyze_spectrum
 
@@ -17,9 +18,10 @@ from .spectrum_advisor import SpectrumRecommendation, analyze_spectrum
 class MethodTuneResult:
     method: str
     params: dict
-    mse: float
-    psnr: float
-    ssim: float
+    mse: float | None
+    psnr: float | None
+    ssim: float | None
+    niqe_like: float | None
     score: float
     trials: list[dict]
 
@@ -42,7 +44,7 @@ class AutoTuneResult:
 
 
 def tune_parameters(
-    reference: np.ndarray,
+    reference: np.ndarray | None,
     noisy: np.ndarray,
     selected_methods: list[str],
     iterations: int,
@@ -79,12 +81,16 @@ def tune_parameters(
     return AutoTuneResult(tuned_params, method_results, recommendation.to_dict())
 
 
-def _score(reference: np.ndarray, output: np.ndarray) -> tuple[float, float, float, float]:
+def _score(reference: np.ndarray | None, output: np.ndarray) -> tuple[float, float | None, float | None, float | None, float | None]:
+    if reference is None:
+        quality = niqe_like_quality(output)
+        return -quality.niqe_like, None, None, None, quality.niqe_like
+
     metrics = reference_metrics(reference, output)
     psnr = 60.0 if np.isinf(metrics.psnr) else metrics.psnr
     mse_penalty = min(metrics.mse * 25.0, 2.0)
     score = float(metrics.ssim + psnr / 60.0 - mse_penalty)
-    return score, metrics.mse, metrics.psnr, metrics.ssim
+    return score, metrics.mse, metrics.psnr, metrics.ssim, None
 
 
 def _odd(value: float, low: int = 1, high: int = 15) -> int:
@@ -157,24 +163,33 @@ def _bayesian_search(
 def _method_result(
     method: str,
     params: dict,
-    reference: np.ndarray,
+    reference: np.ndarray | None,
     output: np.ndarray,
     score: float,
     trials: list[dict] | None = None,
 ) -> MethodTuneResult:
-    _, mse, psnr, ssim = _score(reference, output)
-    return MethodTuneResult(method=method, params=params, mse=mse, psnr=psnr, ssim=ssim, score=score, trials=trials or [])
+    _, mse, psnr, ssim, niqe_like = _score(reference, output)
+    return MethodTuneResult(
+        method=method,
+        params=params,
+        mse=mse,
+        psnr=psnr,
+        ssim=ssim,
+        niqe_like=niqe_like,
+        score=score,
+        trials=trials or [],
+    )
 
 
-def _tune_mean(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
+def _tune_mean(reference: np.ndarray | None, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
     candidates = [1, 3, 5, 7, 9, 11, 13, 15]
     trials = []
     best_payload = None
     best_score = -np.inf
     for size in candidates:
         output = mean_filter(noisy, size)
-        score, mse, psnr, ssim = _score(reference, output)
-        trials.append({"mean_size": size, "score": score, "mse": mse, "psnr": psnr, "ssim": ssim})
+        score, mse, psnr, ssim, niqe_like = _score(reference, output)
+        trials.append({"mean_size": size, "score": score, "mse": mse, "psnr": psnr, "ssim": ssim, "niqe_like": niqe_like})
         if score > best_score:
             best_score = score
             best_payload = {"mean_size": size, "_output": output}
@@ -184,15 +199,15 @@ def _tune_mean(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: n
     return _method_result("均值滤波", best_payload, reference, output, best_score, trials)
 
 
-def _tune_median(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
+def _tune_median(reference: np.ndarray | None, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
     candidates = [1, 3, 5, 7, 9, 11, 13, 15]
     trials = []
     best_payload = None
     best_score = -np.inf
     for size in candidates:
         output = median_filter(noisy, size)
-        score, mse, psnr, ssim = _score(reference, output)
-        trials.append({"median_size": size, "score": score, "mse": mse, "psnr": psnr, "ssim": ssim})
+        score, mse, psnr, ssim, niqe_like = _score(reference, output)
+        trials.append({"median_size": size, "score": score, "mse": mse, "psnr": psnr, "ssim": ssim, "niqe_like": niqe_like})
         if score > best_score:
             best_score = score
             best_payload = {"median_size": size, "_output": output}
@@ -202,7 +217,7 @@ def _tune_median(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng:
     return _method_result("中值滤波", best_payload, reference, output, best_score, trials)
 
 
-def _tune_bilateral(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
+def _tune_bilateral(reference: np.ndarray | None, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
     def evaluate(x: np.ndarray) -> tuple[float, dict]:
         sigma_color = 0.02 + x[0] * 0.28
         sigma_spatial = 1.0 + x[1] * 13.0
@@ -215,7 +230,7 @@ def _tune_bilateral(reference: np.ndarray, noisy: np.ndarray, iterations: int, r
     return _method_result("双边滤波", payload, reference, output, score)
 
 
-def _tune_nlm(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
+def _tune_nlm(reference: np.ndarray | None, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
     def evaluate(x: np.ndarray) -> tuple[float, dict]:
         h = 0.35 + x[0] * 1.65
         patch_size = _odd(3 + x[1] * 6, 3, 9)
@@ -230,7 +245,7 @@ def _tune_nlm(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np
 
 
 def _tune_frequency(
-    reference: np.ndarray,
+    reference: np.ndarray | None,
     noisy: np.ndarray,
     recommendation: SpectrumRecommendation,
     iterations: int,
@@ -244,7 +259,7 @@ def _tune_frequency(
     return max(candidate_results, key=lambda result: result.score)
 
 
-def _tune_gaussian_lowpass(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
+def _tune_gaussian_lowpass(reference: np.ndarray | None, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
     def evaluate(x: np.ndarray) -> tuple[float, dict]:
         cutoff = int(round(5 + x[0] * 55))
         response = frequency_response(noisy.shape[:2], "Gaussian Low-Pass", cutoff_percent=cutoff)
@@ -257,7 +272,7 @@ def _tune_gaussian_lowpass(reference: np.ndarray, noisy: np.ndarray, iterations:
     return _method_result("频域滤波", payload, reference, output, score)
 
 
-def _tune_butterworth_lowpass(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
+def _tune_butterworth_lowpass(reference: np.ndarray | None, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
     def evaluate(x: np.ndarray) -> tuple[float, dict]:
         cutoff = int(round(5 + x[0] * 55))
         order = int(round(1 + x[1] * 7))
@@ -271,7 +286,7 @@ def _tune_butterworth_lowpass(reference: np.ndarray, noisy: np.ndarray, iteratio
     return _method_result("频域滤波", payload, reference, output, score)
 
 
-def _tune_radial_bandstop(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
+def _tune_radial_bandstop(reference: np.ndarray | None, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
     def evaluate(x: np.ndarray) -> tuple[float, dict]:
         center = 6.0 + x[0] * 58.0
         width = 1.0 + x[1] * 13.0
@@ -289,7 +304,7 @@ def _tune_radial_bandstop(reference: np.ndarray, noisy: np.ndarray, iterations: 
 
 
 def _tune_notch(
-    reference: np.ndarray,
+    reference: np.ndarray | None,
     noisy: np.ndarray,
     recommendation: SpectrumRecommendation,
     iterations: int,

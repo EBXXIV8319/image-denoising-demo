@@ -16,6 +16,7 @@ from denoise_lab.auto_tune import tune_parameters
 from denoise_lab.frequency import FREQUENCY_FILTERS, frequency_filter, frequency_response
 from denoise_lab.image_io import float_to_uint8, pil_to_float_rgb
 from denoise_lab.noise import NOISE_TYPES, add_noise
+from denoise_lab.sharpening import unsharp_mask
 from denoise_lab.spectrum_advisor import analyze_spectrum
 from denoise_lab.spatial import mean_filter, median_filter
 
@@ -108,6 +109,46 @@ def float_param(
     )
 
 
+def apply_tuned_params_to_state(tuned_params: dict) -> None:
+    direct_keys = {
+        "mean_size",
+        "median_size",
+        "cutoff",
+        "bilateral_color",
+        "bilateral_spatial",
+        "nlm_h",
+        "nlm_patch_size",
+        "nlm_patch_distance",
+    }
+    for key in direct_keys:
+        if key in tuned_params:
+            st.session_state[key] = tuned_params[key]
+
+    if "frequency_type" in tuned_params:
+        st.session_state["frequency_type"] = tuned_params["frequency_type"]
+    if "order" in tuned_params:
+        st.session_state["butterworth_order"] = tuned_params["order"]
+
+    radial_bands = tuned_params.get("radial_bands") or []
+    if radial_bands:
+        st.session_state["radial_band_count"] = len(radial_bands)
+        for index, band in enumerate(radial_bands):
+            st.session_state[f"radial_center_{index}"] = band.get("center", 22.0)
+            st.session_state[f"radial_width_{index}"] = band.get("width", 4.0)
+            st.session_state[f"radial_order_{index}"] = band.get("order", 2)
+            st.session_state[f"radial_depth_{index}"] = band.get("depth", 0.95)
+
+    notches = tuned_params.get("notches") or []
+    if notches:
+        st.session_state["notch_count"] = len(notches)
+        for index, notch in enumerate(notches):
+            st.session_state[f"notch_u_{index}"] = int(round(float(notch.get("u", 0))))
+            st.session_state[f"notch_v_{index}"] = int(round(float(notch.get("v", 81 * (index + 1)))))
+            st.session_state[f"notch_radius_{index}"] = notch.get("radius", 8.0)
+            st.session_state[f"notch_order_{index}"] = notch.get("order", 2)
+            st.session_state[f"notch_depth_{index}"] = notch.get("depth", 0.95)
+
+
 def histogram_dataframe(images: dict[str, object]) -> pd.DataFrame:
     rows = []
     for label, image in images.items():
@@ -158,16 +199,22 @@ def auto_tune_search_table(auto_tune_result: dict | None) -> pd.DataFrame:
         return pd.DataFrame()
     rows = []
     for item in auto_tune_result.get("method_results", []):
-        rows.append(
-            {
-                "方法": item["method"],
-                "调优参数": json.dumps(item["params"], ensure_ascii=False),
-                "MSE": round(item["mse"], 6),
-                "PSNR(dB)": round(item["psnr"], 3),
-                "SSIM": round(item["ssim"], 4),
-                "目标分数": round(item["score"], 4),
-            }
-        )
+        row = {
+            "方法": item["method"],
+            "调优参数": json.dumps(item["params"], ensure_ascii=False),
+            "目标分数": round(item["score"], 4),
+        }
+        if item.get("niqe_like") is None:
+            row.update(
+                {
+                    "MSE": round(item["mse"], 6),
+                    "PSNR(dB)": round(item["psnr"], 3),
+                    "SSIM": round(item["ssim"], 4),
+                }
+            )
+        else:
+            row["NIQE-like"] = round(item["niqe_like"], 4)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -190,18 +237,6 @@ def auto_tune_applied_table(auto_tune_result: dict | None, reference, outputs) -
                 "搜索目标分数": round(item["score"], 4),
             }
         )
-    return pd.DataFrame(rows)
-
-
-def auto_tune_trial_table(auto_tune_result: dict | None) -> pd.DataFrame:
-    if not auto_tune_result:
-        return pd.DataFrame()
-    rows = []
-    for item in auto_tune_result.get("method_results", []):
-        for trial in item.get("trials", []):
-            row = {"方法": item["method"]}
-            row.update(trial)
-            rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -333,17 +368,19 @@ with st.sidebar:
             mixed_preprocess_size = int_param("预处理中值滤波核大小（像素）", 1, 15, 3, 2, "mixed_preprocess_size", odd=True)
 
     st.header("自动调参")
-    auto_allowed = source is not None and has_reference and bool(selected_methods)
+    auto_allowed = source is not None and bool(selected_methods)
     auto_iterations = int_param("BO 迭代次数", 4, 24, 10, 1, "auto_iterations", disabled=not auto_allowed)
     auto_enabled = st.checkbox("启用自动调参", value=False, disabled=not auto_allowed)
     auto_tune_result = None
     auto_locked = False
-    if not has_reference:
-        st.caption("上传图像本身含噪时没有干净参考图，不能启用自动调参。")
-    elif source is None:
+    if source is None:
         st.caption("请先上传原图后再启用自动调参。")
     elif not selected_methods:
         st.caption("请至少选择一种参与对比的方法。")
+    elif not has_reference:
+        st.caption("当前上传图像已含噪，将使用 NIQE-like 无参考指标自动调参，参数不会锁定。")
+    else:
+        st.caption("当前由程序加噪，将使用 MSE、PSNR、SSIM 自动调参，参数会锁定。")
 
     if auto_enabled and auto_allowed:
         signature = json.dumps(
@@ -359,6 +396,7 @@ with st.sidebar:
                 "mixed_preprocess": use_mixed_preprocess,
                 "mixed_preprocess_size": mixed_preprocess_size,
                 "iterations": auto_iterations,
+                "metric_mode": "full_reference" if has_reference else "niqe_like_no_reference",
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -366,19 +404,22 @@ with st.sidebar:
         if st.session_state.get("auto_tune_signature") != signature:
             with st.spinner("正在使用贝叶斯优化进行自动调参..."):
                 tuning_input = median_filter(noisy, mixed_preprocess_size) if noise_type == "混合噪声" and use_mixed_preprocess else noisy
-                result = tune_parameters(source, noisy, selected_methods, auto_iterations, int(seed), filter_input=tuning_input)
+                reference_for_tuning = source if has_reference else None
+                result = tune_parameters(reference_for_tuning, noisy, selected_methods, auto_iterations, int(seed), filter_input=tuning_input)
             st.session_state["auto_tune_signature"] = signature
             st.session_state["auto_tune_result"] = result.to_dict()
+            st.session_state["auto_tune_state_applied"] = False
         auto_tune_result = st.session_state.get("auto_tune_result")
-        auto_locked = bool(auto_tune_result)
+        auto_locked = bool(auto_tune_result and has_reference)
         if auto_tune_result:
-            st.success("已应用 BO 自动调参结果，参数框已锁定。")
-            with st.expander("查看 BO 搜索摘要（原尺寸口径）", expanded=False):
-                st.dataframe(auto_tune_search_table(auto_tune_result), hide_index=True, use_container_width=True)
-                trial_df = auto_tune_trial_table(auto_tune_result)
-                if not trial_df.empty:
-                    st.caption("离散候选核评分与参考指标一样，均来自原尺寸图像。")
-                    st.dataframe(trial_df, hide_index=True, use_container_width=True)
+            if not st.session_state.get("auto_tune_state_applied", False):
+                apply_tuned_params_to_state(auto_tune_result["params"])
+                st.session_state["auto_tune_state_applied"] = True
+            if auto_locked:
+                st.success("已应用 BO 自动调参结果，参数框已锁定。")
+            else:
+                st.success("已应用 NIQE-like 自动调参建议，参数框仍可继续手动修改。")
+            st.dataframe(auto_tune_search_table(auto_tune_result), hide_index=True, use_container_width=True)
     tuned_params = auto_tune_result["params"] if auto_tune_result else {}
 
     if "均值滤波" in selected_methods:
@@ -679,7 +720,7 @@ metrics_df = metric_table(source, noisy, outputs) if has_reference and outputs e
 auto_tune_applied_df = auto_tune_applied_table(auto_tune_result, source, outputs) if has_reference and outputs else pd.DataFrame()
 response_fig = plot_response(response) if response is not None else None
 
-image_tab, spectrum_tab, histogram_tab, edge_tab = st.tabs(["图像", "频谱", "灰度直方图", "边缘"])
+image_tab, spectrum_tab, histogram_tab, edge_tab, sharpen_tab = st.tabs(["图像", "频谱", "灰度直方图", "边缘", "后处理锐化"])
 
 with image_tab:
     top = st.columns([1, 1])
@@ -720,13 +761,11 @@ with image_tab:
 
     if auto_tune_result:
         st.subheader("BO 调参结果")
-        st.caption("下表按原尺寸最终输出计算，与上方参考指标使用同一口径。")
-        st.dataframe(auto_tune_applied_df, hide_index=True, use_container_width=True)
-        trial_df = auto_tune_trial_table(auto_tune_result)
-        if not trial_df.empty:
-            with st.expander("离散候选核评分（原尺寸口径）"):
-                st.dataframe(trial_df, hide_index=True, use_container_width=True)
-        with st.expander("BO 搜索摘要（原尺寸口径）"):
+        if has_reference:
+            st.caption("下表按原尺寸最终输出计算，与上方参考指标使用同一口径。")
+            st.dataframe(auto_tune_applied_df, hide_index=True, use_container_width=True)
+        else:
+            st.caption("上传图像已含噪时无参考图，使用 NIQE-like 无参考指标；分数越低越好。")
             st.dataframe(auto_tune_search_table(auto_tune_result), hide_index=True, use_container_width=True)
 
     st.subheader("一键下载")
@@ -800,6 +839,50 @@ with edge_tab:
         with cols[index % len(cols)]:
             st.image(edges, caption=f"{name} 边缘", clamp=True, use_container_width=True)
             image_download_button("下载边缘图", edges, f"{safe_filename(name)}_edges.png")
+
+with sharpen_tab:
+    st.subheader("后处理锐化")
+    if not outputs:
+        st.warning("请先至少选择并运行一种滤波方法，再从其输出中选择图片进行锐化。")
+    else:
+        sharpen_source_name = st.selectbox("选择一张滤波结果", list(outputs.keys()))
+        sharpen_radius = float_param("USM 模糊半径 sigma（像素）", 0.1, 8.0, 1.2, 0.1, "sharpen_radius", "%.1f")
+        sharpen_amount = float_param("USM 锐化强度", 0.0, 3.0, 0.8, 0.1, "sharpen_amount", "%.1f")
+        sharpen_threshold = float_param("细节阈值", 0.0, 0.2, 0.0, 0.01, "sharpen_threshold", "%.2f")
+
+        if st.button("执行后处理锐化", use_container_width=True):
+            source_for_sharpening = outputs[sharpen_source_name]
+            st.session_state["sharpened_result"] = unsharp_mask(
+                source_for_sharpening,
+                sharpen_radius,
+                sharpen_amount,
+                sharpen_threshold,
+            )
+            st.session_state["sharpened_source_name"] = sharpen_source_name
+            st.session_state["sharpened_params"] = {
+                "radius": sharpen_radius,
+                "amount": sharpen_amount,
+                "threshold": sharpen_threshold,
+            }
+
+        if "sharpened_result" in st.session_state:
+            displayed_source_name = st.session_state.get("sharpened_source_name", sharpen_source_name)
+            if displayed_source_name not in outputs:
+                displayed_source_name = sharpen_source_name
+            st.caption(
+                f"当前锐化来源：{displayed_source_name}；"
+                f"参数：{st.session_state.get('sharpened_params')}"
+            )
+            cols = st.columns([1, 1])
+            with cols[0]:
+                st.markdown('<div class="method-label">锐化前</div>', unsafe_allow_html=True)
+                st.image(outputs[displayed_source_name], clamp=True, use_container_width=True)
+            with cols[1]:
+                st.markdown('<div class="method-label">USM 后处理锐化</div>', unsafe_allow_html=True)
+                st.image(st.session_state["sharpened_result"], clamp=True, use_container_width=True)
+                image_download_button("下载锐化结果", st.session_state["sharpened_result"], "usm_sharpened.png")
+        else:
+            st.info("设置参数后点击“执行后处理锐化”才会生成锐化结果。")
 
 if response_fig is not None:
     plt.close(response_fig)
