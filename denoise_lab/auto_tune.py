@@ -5,7 +5,6 @@ from math import erf, sqrt
 from typing import Callable
 
 import numpy as np
-from skimage import transform
 
 from .advanced import bilateral_filter, nlm_filter
 from .analysis import reference_metrics
@@ -48,15 +47,16 @@ def tune_parameters(
     selected_methods: list[str],
     iterations: int,
     seed: int,
+    filter_input: np.ndarray | None = None,
 ) -> AutoTuneResult:
-    reference, noisy = _prepare_tuning_images(reference, noisy)
     rng = np.random.default_rng(seed)
-    recommendation = analyze_spectrum(noisy)
+    method_input = noisy if filter_input is None else filter_input
+    recommendation = analyze_spectrum(method_input)
     tuned_params: dict = {}
     method_results: list[MethodTuneResult] = []
 
     if "均值滤波" in selected_methods:
-        result = _tune_mean(reference, noisy, max(iterations, 4), rng)
+        result = _tune_mean(reference, method_input, max(iterations, 4), rng)
         tuned_params.update(result.params)
         method_results.append(result)
     if "中值滤波" in selected_methods:
@@ -64,32 +64,19 @@ def tune_parameters(
         tuned_params.update(result.params)
         method_results.append(result)
     if "频域滤波" in selected_methods:
-        result = _tune_frequency(reference, noisy, recommendation, max(iterations, 6), rng)
+        result = _tune_frequency(reference, method_input, recommendation, max(iterations, 6), rng)
         tuned_params.update(result.params)
         method_results.append(result)
     if "双边滤波" in selected_methods:
-        result = _tune_bilateral(reference, noisy, max(iterations, 6), rng)
+        result = _tune_bilateral(reference, method_input, max(iterations, 6), rng)
         tuned_params.update(result.params)
         method_results.append(result)
     if "NLM" in selected_methods:
-        result = _tune_nlm(reference, noisy, max(iterations, 6), rng)
+        result = _tune_nlm(reference, method_input, max(iterations, 6), rng)
         tuned_params.update(result.params)
         method_results.append(result)
 
     return AutoTuneResult(tuned_params, method_results, recommendation.to_dict())
-
-
-def _prepare_tuning_images(reference: np.ndarray, noisy: np.ndarray, max_side: int = 160) -> tuple[np.ndarray, np.ndarray]:
-    h, w = reference.shape[:2]
-    scale = min(1.0, max_side / max(h, w))
-    if scale >= 1.0:
-        return reference, noisy
-    output_shape = (max(8, int(round(h * scale))), max(8, int(round(w * scale))))
-    if reference.ndim == 3:
-        output_shape = (*output_shape, reference.shape[-1])
-    small_reference = transform.resize(reference, output_shape, preserve_range=True, anti_aliasing=True)
-    small_noisy = transform.resize(noisy, output_shape, preserve_range=True, anti_aliasing=True)
-    return np.clip(small_reference, 0.0, 1.0), np.clip(small_noisy, 0.0, 1.0)
 
 
 def _score(reference: np.ndarray, output: np.ndarray) -> tuple[float, float, float, float]:

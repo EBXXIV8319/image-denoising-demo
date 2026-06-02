@@ -153,7 +153,7 @@ def metric_table(reference, noisy, outputs) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def auto_tune_summary_table(auto_tune_result: dict | None) -> pd.DataFrame:
+def auto_tune_search_table(auto_tune_result: dict | None) -> pd.DataFrame:
     if not auto_tune_result:
         return pd.DataFrame()
     rows = []
@@ -166,6 +166,28 @@ def auto_tune_summary_table(auto_tune_result: dict | None) -> pd.DataFrame:
                 "PSNR(dB)": round(item["psnr"], 3),
                 "SSIM": round(item["ssim"], 4),
                 "目标分数": round(item["score"], 4),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def auto_tune_applied_table(auto_tune_result: dict | None, reference, outputs) -> pd.DataFrame:
+    if not auto_tune_result or reference is None:
+        return pd.DataFrame()
+    rows = []
+    for item in auto_tune_result.get("method_results", []):
+        method = item["method"]
+        if method not in outputs:
+            continue
+        result = reference_metrics(reference, outputs[method])
+        rows.append(
+            {
+                "方法": method,
+                "调优参数": json.dumps(item["params"], ensure_ascii=False),
+                "MSE": round(result.mse, 6),
+                "PSNR(dB)": round(result.psnr, 3),
+                "SSIM": round(result.ssim, 4),
+                "搜索目标分数": round(item["score"], 4),
             }
         )
     return pd.DataFrame(rows)
@@ -343,17 +365,19 @@ with st.sidebar:
         )
         if st.session_state.get("auto_tune_signature") != signature:
             with st.spinner("正在使用贝叶斯优化进行自动调参..."):
-                result = tune_parameters(source, noisy, selected_methods, auto_iterations, int(seed))
+                tuning_input = median_filter(noisy, mixed_preprocess_size) if noise_type == "混合噪声" and use_mixed_preprocess else noisy
+                result = tune_parameters(source, noisy, selected_methods, auto_iterations, int(seed), filter_input=tuning_input)
             st.session_state["auto_tune_signature"] = signature
             st.session_state["auto_tune_result"] = result.to_dict()
         auto_tune_result = st.session_state.get("auto_tune_result")
         auto_locked = bool(auto_tune_result)
         if auto_tune_result:
             st.success("已应用 BO 自动调参结果，参数框已锁定。")
-            st.dataframe(auto_tune_summary_table(auto_tune_result), hide_index=True, use_container_width=True)
-            trial_df = auto_tune_trial_table(auto_tune_result)
-            if not trial_df.empty:
-                with st.expander("查看离散候选核评分", expanded=False):
+            with st.expander("查看 BO 搜索摘要（原尺寸口径）", expanded=False):
+                st.dataframe(auto_tune_search_table(auto_tune_result), hide_index=True, use_container_width=True)
+                trial_df = auto_tune_trial_table(auto_tune_result)
+                if not trial_df.empty:
+                    st.caption("离散候选核评分与参考指标一样，均来自原尺寸图像。")
                     st.dataframe(trial_df, hide_index=True, use_container_width=True)
     tuned_params = auto_tune_result["params"] if auto_tune_result else {}
 
@@ -622,6 +646,7 @@ with st.sidebar:
             "enabled": bool(auto_enabled and auto_allowed),
             "locked": auto_locked,
             "iterations": auto_iterations,
+            "metric_scope": "full_resolution",
             "result": auto_tune_result,
         },
         "spectrum_recommendation": spectrum_recommendation,
@@ -651,6 +676,7 @@ hist_images = {"含噪图": noisy}
 hist_images.update(outputs)
 zip_histogram_df = histogram_dataframe({"含噪图": noisy, **outputs})
 metrics_df = metric_table(source, noisy, outputs) if has_reference and outputs else None
+auto_tune_applied_df = auto_tune_applied_table(auto_tune_result, source, outputs) if has_reference and outputs else pd.DataFrame()
 response_fig = plot_response(response) if response is not None else None
 
 image_tab, spectrum_tab, histogram_tab, edge_tab = st.tabs(["图像", "频谱", "灰度直方图", "边缘"])
@@ -694,11 +720,14 @@ with image_tab:
 
     if auto_tune_result:
         st.subheader("BO 调参结果")
-        st.dataframe(auto_tune_summary_table(auto_tune_result), hide_index=True, use_container_width=True)
+        st.caption("下表按原尺寸最终输出计算，与上方参考指标使用同一口径。")
+        st.dataframe(auto_tune_applied_df, hide_index=True, use_container_width=True)
         trial_df = auto_tune_trial_table(auto_tune_result)
         if not trial_df.empty:
-            with st.expander("离散候选核评分"):
+            with st.expander("离散候选核评分（原尺寸口径）"):
                 st.dataframe(trial_df, hide_index=True, use_container_width=True)
+        with st.expander("BO 搜索摘要（原尺寸口径）"):
+            st.dataframe(auto_tune_search_table(auto_tune_result), hide_index=True, use_container_width=True)
 
     st.subheader("一键下载")
     st.download_button(
