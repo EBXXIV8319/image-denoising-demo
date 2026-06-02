@@ -153,6 +153,36 @@ def metric_table(reference, noisy, outputs) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def auto_tune_summary_table(auto_tune_result: dict | None) -> pd.DataFrame:
+    if not auto_tune_result:
+        return pd.DataFrame()
+    rows = []
+    for item in auto_tune_result.get("method_results", []):
+        rows.append(
+            {
+                "方法": item["method"],
+                "调优参数": json.dumps(item["params"], ensure_ascii=False),
+                "MSE": round(item["mse"], 6),
+                "PSNR(dB)": round(item["psnr"], 3),
+                "SSIM": round(item["ssim"], 4),
+                "目标分数": round(item["score"], 4),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def auto_tune_trial_table(auto_tune_result: dict | None) -> pd.DataFrame:
+    if not auto_tune_result:
+        return pd.DataFrame()
+    rows = []
+    for item in auto_tune_result.get("method_results", []):
+        for trial in item.get("trials", []):
+            row = {"方法": item["method"]}
+            row.update(trial)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def run_methods(noisy, selected_methods, params):
     outputs = {}
     response = None
@@ -320,6 +350,11 @@ with st.sidebar:
         auto_locked = bool(auto_tune_result)
         if auto_tune_result:
             st.success("已应用 BO 自动调参结果，参数框已锁定。")
+            st.dataframe(auto_tune_summary_table(auto_tune_result), hide_index=True, use_container_width=True)
+            trial_df = auto_tune_trial_table(auto_tune_result)
+            if not trial_df.empty:
+                with st.expander("查看离散候选核评分", expanded=False):
+                    st.dataframe(trial_df, hide_index=True, use_container_width=True)
     tuned_params = auto_tune_result["params"] if auto_tune_result else {}
 
     if "均值滤波" in selected_methods:
@@ -656,6 +691,14 @@ with image_tab:
     if metrics_df is not None:
         st.subheader("参考指标")
         st.dataframe(metrics_df, hide_index=True, use_container_width=True)
+
+    if auto_tune_result:
+        st.subheader("BO 调参结果")
+        st.dataframe(auto_tune_summary_table(auto_tune_result), hide_index=True, use_container_width=True)
+        trial_df = auto_tune_trial_table(auto_tune_result)
+        if not trial_df.empty:
+            with st.expander("离散候选核评分"):
+                st.dataframe(trial_df, hide_index=True, use_container_width=True)
 
     st.subheader("一键下载")
     st.download_button(

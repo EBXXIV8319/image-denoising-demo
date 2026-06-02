@@ -22,6 +22,7 @@ class MethodTuneResult:
     psnr: float
     ssim: float
     score: float
+    trials: list[dict]
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -166,33 +167,52 @@ def _bayesian_search(
     return payloads[best_index], float(y_train[best_index])
 
 
-def _method_result(method: str, params: dict, reference: np.ndarray, output: np.ndarray, score: float) -> MethodTuneResult:
+def _method_result(
+    method: str,
+    params: dict,
+    reference: np.ndarray,
+    output: np.ndarray,
+    score: float,
+    trials: list[dict] | None = None,
+) -> MethodTuneResult:
     _, mse, psnr, ssim = _score(reference, output)
-    return MethodTuneResult(method=method, params=params, mse=mse, psnr=psnr, ssim=ssim, score=score)
+    return MethodTuneResult(method=method, params=params, mse=mse, psnr=psnr, ssim=ssim, score=score, trials=trials or [])
 
 
 def _tune_mean(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
-    def evaluate(x: np.ndarray) -> tuple[float, dict]:
-        size = _odd(1 + x[0] * 14)
+    candidates = [1, 3, 5, 7, 9, 11, 13, 15]
+    trials = []
+    best_payload = None
+    best_score = -np.inf
+    for size in candidates:
         output = mean_filter(noisy, size)
-        score, *_ = _score(reference, output)
-        return score, {"mean_size": size, "_output": output}
+        score, mse, psnr, ssim = _score(reference, output)
+        trials.append({"mean_size": size, "score": score, "mse": mse, "psnr": psnr, "ssim": ssim})
+        if score > best_score:
+            best_score = score
+            best_payload = {"mean_size": size, "_output": output}
 
-    payload, score = _bayesian_search(evaluate, 1, iterations, rng)
-    output = payload.pop("_output")
-    return _method_result("均值滤波", payload, reference, output, score)
+    assert best_payload is not None
+    output = best_payload.pop("_output")
+    return _method_result("均值滤波", best_payload, reference, output, best_score, trials)
 
 
 def _tune_median(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
-    def evaluate(x: np.ndarray) -> tuple[float, dict]:
-        size = _odd(1 + x[0] * 14)
+    candidates = [1, 3, 5, 7, 9, 11, 13, 15]
+    trials = []
+    best_payload = None
+    best_score = -np.inf
+    for size in candidates:
         output = median_filter(noisy, size)
-        score, *_ = _score(reference, output)
-        return score, {"median_size": size, "_output": output}
+        score, mse, psnr, ssim = _score(reference, output)
+        trials.append({"median_size": size, "score": score, "mse": mse, "psnr": psnr, "ssim": ssim})
+        if score > best_score:
+            best_score = score
+            best_payload = {"median_size": size, "_output": output}
 
-    payload, score = _bayesian_search(evaluate, 1, iterations, rng)
-    output = payload.pop("_output")
-    return _method_result("中值滤波", payload, reference, output, score)
+    assert best_payload is not None
+    output = best_payload.pop("_output")
+    return _method_result("中值滤波", best_payload, reference, output, best_score, trials)
 
 
 def _tune_bilateral(reference: np.ndarray, noisy: np.ndarray, iterations: int, rng: np.random.Generator) -> MethodTuneResult:
