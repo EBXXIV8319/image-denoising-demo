@@ -1,0 +1,45 @@
+\contentsline {section}{一、引言}{1}{section.1}%
+\contentsline {section}{二、任务目标与系统设计}{1}{section.2}%
+\contentsline {subsection}{\numberline {(一)}任务目标}{1}{subsection.2.1}%
+\contentsline {subsection}{\numberline {(二)}系统交互流程}{1}{subsection.2.2}%
+\contentsline {subsection}{\numberline {(三)}代码结构}{2}{subsection.2.3}%
+\contentsline {section}{三、工程实现细节}{3}{section.3}%
+\contentsline {subsection}{\numberline {(一)}图像输入与数据规范}{3}{subsection.3.1}%
+\contentsline {subsection}{\numberline {(二)}实时计算流程}{4}{subsection.3.2}%
+\contentsline {subsection}{\numberline {(三)}频谱页与参数设计}{5}{subsection.3.3}%
+\contentsline {subsection}{\numberline {(四)}下载与复现设计}{6}{subsection.3.4}%
+\contentsline {section}{四、噪声模型}{6}{section.4}%
+\contentsline {subsection}{\numberline {(一)}高斯噪声}{6}{subsection.4.1}%
+\contentsline {subsection}{\numberline {(二)}椒盐噪声}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {(三)}周期噪声}{7}{subsection.4.3}%
+\contentsline {section}{五、空域滤波方法}{7}{section.5}%
+\contentsline {subsection}{\numberline {(一)}均值滤波}{7}{subsection.5.1}%
+\contentsline {subsection}{\numberline {(二)}中值滤波}{7}{subsection.5.2}%
+\contentsline {section}{六、频域分析与滤波器设计}{9}{section.6}%
+\contentsline {subsection}{\numberline {(一)}二维 DFT 与频谱观察}{9}{subsection.6.1}%
+\contentsline {subsection}{\numberline {(二)}低通滤波器}{9}{subsection.6.2}%
+\contentsline {subsection}{\numberline {(三)}径向 Band-Stop 滤波器}{9}{subsection.6.3}%
+\contentsline {subsection}{\numberline {(四)}成对陷波带阻滤波器}{10}{subsection.6.4}%
+\contentsline {section}{七、保边滤波与高级去噪}{11}{section.7}%
+\contentsline {subsection}{\numberline {(一)}双边滤波}{11}{subsection.7.1}%
+\contentsline {subsection}{\numberline {(二)}非局部均值 NLM}{12}{subsection.7.2}%
+\contentsline {section}{八、评价指标与自动调参}{13}{section.8}%
+\contentsline {subsection}{\numberline {(一)}有参考图像时的指标}{13}{subsection.8.1}%
+\contentsline {subsection}{\numberline {(二)}贝叶斯优化目标函数}{13}{subsection.8.2}%
+\contentsline {section}{九、后处理锐化}{15}{section.9}%
+\contentsline {section}{十、实验结果与分析}{16}{section.10}%
+\contentsline {subsection}{\numberline {(一)}高斯噪声实验}{16}{subsection.10.1}%
+\contentsline {subsection}{\numberline {(二)}椒盐噪声实验}{17}{subsection.10.2}%
+\contentsline {subsection}{\numberline {(三)}周期噪声实验}{17}{subsection.10.3}%
+\contentsline {subsection}{\numberline {(四)}混合噪声实验}{18}{subsection.10.4}%
+\contentsline {subsection}{\numberline {(五)}边缘与灰度直方图观察}{19}{subsection.10.5}%
+\contentsline {section}{十一、参数选择讨论}{20}{section.11}%
+\contentsline {subsection}{\numberline {(一)}空域参数}{20}{subsection.11.1}%
+\contentsline {subsection}{\numberline {(二)}频域参数}{20}{subsection.11.2}%
+\contentsline {subsection}{\numberline {(三)}保边与 NLM 参数}{20}{subsection.11.3}%
+\contentsline {section}{十二、系统特点与不足}{20}{section.12}%
+\contentsline {subsection}{\numberline {(一)}系统特点}{20}{subsection.12.1}%
+\contentsline {subsection}{\numberline {(二)}不足与改进方向}{21}{subsection.12.2}%
+\contentsline {section}{成员分工}{21}{section*.2}%
+\contentsline {section}{结论}{21}{section*.3}%
+\contentsline {section}{参考文献}{22}{section*.3}%
